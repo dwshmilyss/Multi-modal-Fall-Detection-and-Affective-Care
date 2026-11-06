@@ -1,0 +1,45 @@
+# AI-Vision-Guardian — Python 依赖
+# 兼容 Python 3.8 ~ 3.11（PyQt6 与 mediapipe 截止 2026-07 的稳定支持范围）
+
+# ---------------- GUI ----------------
+PyQt6>=6.6,<6.9
+
+# ---------------- 视觉 & 机器学习 ----------------
+# OpenCV (headless 版体积更小；需要 GUI 显示才装 pyqt6-backend opencv-python)
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=10.0.0
+# PyTorch 家族（CUDA 12.4 版，适配 RTX 3070 Ti 等 NVIDIA 显卡）
+# ⚠️ 默认 pip install 只装 CPU 版，需通过 install.bat 或手动执行：
+#    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+torch>=2.1.0
+torchvision>=0.16.0
+torchaudio>=2.1.0
+ultralytics>=8.2.0
+mediapipe>=0.10.7
+
+# ---------------- 音频 / TTS / 语音 ----------------
+# 离线 TTS（中文 SAPI5 走 Windows 自带）
+pyttsx3>=2.90
+# 告警音播放
+pygame>=2.5.0
+# 音频采集
+PyAudio>=0.2.14
+# 麦克风录音 / 在线识别
+SpeechRecognition>=3.10.0
+# 离线中文识别
+vosk>=0.3.45
+
+# ---------------- 数据库 ----------------
+PyMySQL>=1.1.0
+
+# ---------------- 工具 ----------------
+requests>=2.31.0
+
+# ---------------- 可选：加速 LLM 推理（按需启用） ----------------
+# transformers>=4.40.0         # 本地 LLM（Qwen2 / ChatGLM3）
+# accelerate>=0.27.0
+
+# ---------------- 测试 ----------------
+pytest>=7.4.0
+pytest-qt>=4.4.0
