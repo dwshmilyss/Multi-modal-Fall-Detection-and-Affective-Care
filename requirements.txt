@@ -3,6 +3,7 @@
 
 # ---------------- GUI ----------------
 PyQt6>=6.6,<6.9
+PyQt6-WebEngine>=6.6,<6.9    # 用于 ECharts 趋势图（健康大屏）
 
 # ---------------- 视觉 & 机器学习 ----------------
 # OpenCV (headless 版体积更小；需要 GUI 显示才装 pyqt6-backend opencv-python)

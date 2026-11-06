@@ -44,6 +44,10 @@ SettingsDialog：系统高级参数设置（调节跌倒倾斜角阈值、声音
 import os
 import time as _time
 import threading
+import random
+import csv
+import io
+from datetime import datetime, timedelta
 import pymysql
 import cv2
 import numpy as np
@@ -54,6 +58,11 @@ from PyQt6.QtWidgets import (QDialog, QLabel, QPushButton, QListWidget, QListWid
                              QComboBox, QProgressBar, QPlainTextEdit, QToolButton, QMenu)
 from PyQt6.QtCore import Qt, QTimer, QUrl, QThread, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QDesktopServices, QFont, QAction
+try:
+    from PyQt6.QtWebEngineWidgets import QWebEngineView
+    HAS_WEBENGINE = True
+except ImportError:
+    HAS_WEBENGINE = False
 
 class LoginDialog(QDialog):
     def __init__(self, parent=None):
@@ -340,85 +349,233 @@ class HistoryDialog(QDialog):
         event.accept()
 
 
+# ==================== 健康数据模拟器 ====================
+
+class HealthDataSimulator:
+    """模拟健康指标数据生成器（基于正态分布的随机波动，更真实）"""
+    
+    def __init__(self):
+        self.heart_rate = 75
+        self.spo2 = 98
+        self.bp_systolic = 120
+        self.bp_diastolic = 78
+        self.steps = 3420
+        self.temperature = 36.5
+        self.battery = 92
+        self.history = []
+        self.max_history = 43200
+        now = datetime.now()
+        for i in range(100):
+            t = now - timedelta(seconds=(100-i)*2)
+            self.history.append((t, random.gauss(75, 5), random.gauss(98, 1), random.gauss(120, 8), random.gauss(78, 5), 3420 + i * random.randint(0, 3), random.gauss(36.5, 0.2), 92 - i * 0.01))
+    
+    def update(self):
+        if random.random() < 0.05:
+            self.heart_rate = random.choice([random.uniform(50, 60), random.uniform(100, 120)])
+        else:
+            self.heart_rate = max(60, min(90, self.heart_rate + random.gauss(0, 2)))
+        self.spo2 = max(90, min(100, self.spo2 + random.gauss(0, 0.5)))
+        self.bp_systolic = max(90, min(150, self.bp_systolic + random.gauss(0, 3)))
+        self.bp_diastolic = max(60, min(100, self.bp_diastolic + random.gauss(0, 2)))
+        self.steps += random.randint(0, 5)
+        self.temperature = max(35.5, min(38.5, self.temperature + random.gauss(0, 0.1)))
+        self.battery = max(0, self.battery - random.uniform(0, 0.05))
+        self.history.append((datetime.now(), self.heart_rate, self.spo2, self.bp_systolic, self.bp_diastolic, self.steps, self.temperature, self.battery))
+        if len(self.history) > self.max_history:
+            self.history.pop(0)
+    
+    def get_status(self, metric, value):
+        if metric == "heart_rate":
+            return ("异常", "#EF4444") if value < 60 or value > 100 else ("正常平稳", "#10B981")
+        elif metric == "spo2":
+            return ("偏低", "#F59E0B") if value < 95 else ("优良安全", "#10B981")
+        elif metric == "bp":
+            return ("血压异常", "#EF4444") if value[0] > 140 or value[0] < 90 else ("正常范围", "#10B981")
+        elif metric == "temperature":
+            return ("发热", "#EF4444") if value > 37.5 else ("无发热", "#10B981")
+        elif metric == "battery":
+            return ("电量不足", "#EF4444") if value < 20 else ("续航充足", "#10B981")
+        return ("正常", "#10B981")
+
+
+# ==================== 健康趋势图弹窗 ====================
+
+class HealthTrendDialog(QDialog):
+    """ECharts 健康趋势图弹窗"""
+    
+    def __init__(self, metric_name, metric_data, history_data, parent=None):
+        super().__init__(parent)
+        self.metric_name = metric_name
+        self.metric_data = metric_data
+        self.history_data = history_data
+        self.current_range = "24h"
+        self.initUI()
+    
+    def initUI(self):
+        self.setWindowTitle(f" {self.metric_name} - 健康趋势分析")
+        self.resize(1000, 700)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(15, 15, 15, 15)
+        ctrl_layout = QHBoxLayout()
+        ctrl_layout.addWidget(QLabel("时间范围:"))
+        self.range_combo = QComboBox()
+        self.range_combo.addItems(["24 小时", "7 天", "30 天"])
+        self.range_combo.currentTextChanged.connect(self.on_range_changed)
+        ctrl_layout.addWidget(self.range_combo)
+        ctrl_layout.addStretch()
+        btn_export = QPushButton(" 导出 CSV")
+        btn_export.setStyleSheet("background-color: #059669; color: white; padding: 8px 16px; border-radius: 4px;")
+        btn_export.clicked.connect(self.export_csv)
+        ctrl_layout.addWidget(btn_export)
+        btn_close = QPushButton("关闭")
+        btn_close.setStyleSheet("background-color: #475569; color: white; padding: 8px 16px; border-radius: 4px;")
+        btn_close.clicked.connect(self.accept)
+        ctrl_layout.addWidget(btn_close)
+        layout.addLayout(ctrl_layout)
+        if HAS_WEBENGINE:
+            self.web_view = QWebEngineView()
+            self.web_view.setStyleSheet("background-color: #1E293B; border-radius: 8px;")
+            layout.addWidget(self.web_view)
+            self.update_chart()
+        else:
+            lbl = QLabel("⚠️ 需要安装 PyQt6-WebEngine 才能显示趋势图")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("color: #EF4444; font-size: 14px;")
+            layout.addWidget(lbl)
+    
+    def on_range_changed(self, text):
+        self.current_range = "24h" if "24" in text else ("7d" if "7" in text else "30d")
+        self.update_chart()
+    
+    def get_filtered_data(self):
+        now = datetime.now()
+        cutoff = now - (timedelta(hours=24) if self.current_range == "24h" else (timedelta(days=7) if self.current_range == "7d" else timedelta(days=30)))
+        return [(t, v) for t, v in self.history_data if t >= cutoff]
+    
+    def update_chart(self):
+        if not HAS_WEBENGINE:
+            return
+        filtered = self.get_filtered_data()
+        if not filtered:
+            return
+        times = [t.strftime("%m-%d %H:%M") for t, v in filtered]
+        values = [round(v, 1) for t, v in filtered]
+        threshold_high = 100 if "心率" in self.metric_name else None
+        threshold_low = 60 if "心率" in self.metric_name else None
+        chart_html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script><style>body{{margin:0;padding:20px;background:#1E293B;}}#chart{{width:100%;height:600px;}}</style></head><body><div id="chart"></div><script>var chart=echarts.init(document.getElementById('chart'));var option={{backgroundColor:'#1E293B',title:{{text:'{self.metric_name} - {self.current_range}',textStyle:{{color:'#38BDF8',fontSize:18}},left:'center'}},tooltip:{{trigger:'axis',backgroundColor:'#334155',borderColor:'#475569',textStyle:{{color:'#F8FAFC'}}}},grid:{{left:'3%',right:'4%',bottom:'3%',top:'15%',containLabel:true}},xAxis:{{type:'category',boundaryGap:false,data:{times},axisLine:{{lineStyle:{{color:'#475569'}}}},axisLabel:{{color:'#94A3B8',rotate:45}}}},yAxis:{{type:'value',axisLine:{{lineStyle:{{color:'#475569'}}}},axisLabel:{{color:'#94A3B8'}},splitLine:{{lineStyle:{{color:'#334155'}}}}}},series:[{{name:'{self.metric_name}',type:'line',smooth:true,symbol:'none',lineStyle:{{width:3,color:'#38BDF8'}},areaStyle:{{color:new echarts.graphic.LinearGradient(0,0,0,1,[{{offset:0,color:'rgba(56,189,248,0.5)'}},{{offset:1,color:'rgba(56,189,248,0.05)'}}])}},data:{values},markLine:{{symbol:'none',data:[{f"{{name:'上限',yAxis:{threshold_high},lineStyle:{{color:'#EF4444',type:'dashed'}}}}" if threshold_high else ""},{f"{{name:'下限',yAxis:{threshold_low},lineStyle:{{color:'#F59E0B',type:'dashed'}}}}" if threshold_low else ""}].filter(x=>x.name)}}}}]}};chart.setOption(option);window.addEventListener('resize',function(){{chart.resize();}});</script></body></html>"""
+        self.web_view.setHtml(chart_html)
+    
+    def export_csv(self):
+        file_name, _ = QFileDialog.getSaveFileName(self, "导出健康数据", "", "CSV Files (*.csv)")
+        if file_name:
+            filtered = self.get_filtered_data()
+            with open(file_name, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f)
+                writer.writerow(['时间', self.metric_name])
+                for t, v in filtered:
+                    writer.writerow([t.strftime("%Y-%m-%d %H:%M:%S"), round(v, 2)])
+            QMessageBox.information(self, "导出成功", f"数据已保存到:\n{file_name}")
+
+
+# ==================== 健康指标大屏 ====================
+
 class HealthDashboardDialog(QDialog):
-    """️ 专属老人健康指标可视化大屏弹窗（与主界面尺寸相当，极具科技感与美观度）"""
+    """️ 专属老人健康指标可视化大屏弹窗（动态数据 + ECharts 趋势图）"""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(" 智能养老 - 老人健康指标可视化监控大屏")
-        self.resize(1100, 650)
+        self.resize(1200, 750)
+        self.simulator = HealthDataSimulator()
+        self.alarm_sound_path = os.path.join(os.path.dirname(__file__), 'alarm.mp3')
         self.initUI()
+        self.start_timer()
 
     def initUI(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(15)
 
-        # 1. 顶部标题与左上角开发注释说明
+        # 1. 顶部标题栏
         top_frame = QFrame()
         top_frame.setStyleSheet("background-color: #1E293B; border-radius: 8px; border: 1px solid #334155;")
-        top_layout = QVBoxLayout(top_frame)
+        top_layout = QHBoxLayout(top_frame)
         
         title_lbl = QLabel(" 老人实时健康体征与多维传感可视化大屏")
         title_lbl.setStyleSheet("font-size: 18px; font-weight: bold; color: #38BDF8; border: none;")
         top_layout.addWidget(title_lbl)
-
-        # 醒目的左上角注释说明
-        note_lbl = QLabel("ℹ️ 开发注释说明：当前大屏展示的各项心率、血氧、血压及运动体征数据均为系统模拟生成。后期正式部署时，可通过 MQTT/TCP 协议无缝接入老人佩戴的智能手环、毫米波雷达等嵌入式物联网硬件设备进行实时数据采集。")
-        note_lbl.setWordWrap(True)
-        note_lbl.setStyleSheet("color: #94A3B8; font-size: 12px; border: none; line-height: 1.4;")
-        top_layout.addWidget(note_lbl)
+        
+        top_layout.addStretch()
+        
+        # 设备连接状态
+        self.device_status_lbl = QLabel("📡 已连接：智能手环 Pro (模拟)")
+        self.device_status_lbl.setStyleSheet("color: #10B981; font-size: 13px; border: none;")
+        top_layout.addWidget(self.device_status_lbl)
+        
+        # 更新时间
+        self.update_time_lbl = QLabel("")
+        self.update_time_lbl.setStyleSheet("color: #94A3B8; font-size: 12px; border: none;")
+        top_layout.addWidget(self.update_time_lbl)
         
         main_layout.addWidget(top_frame)
 
-        # 2. 中部核心卡片网格布局（2行3列）
+        # 2. 中部核心卡片网格布局（2 行 3 列）
         grid_layout = QGridLayout()
         grid_layout.setSpacing(15)
 
-        # 卡片1：实时心率
-        card_hr = self.create_metric_card("️ 实时心率 (Heart Rate)", "76 bpm", "状态: 正常平稳 (波形: ▂▃▅▆▇▆▅▃)", "#0284C7")
-        grid_layout.addWidget(card_hr, 0, 0)
+        # 创建 6 个指标卡片（可点击）
+        self.card_hr = self.create_clickable_card("❤️ 实时心率 (Heart Rate)", "76 bpm", "状态：正常平稳", "#0284C7", "heart_rate")
+        grid_layout.addWidget(self.card_hr, 0, 0)
 
-        # 卡片2：血氧饱和度
-        card_spo2 = self.create_metric_card(" 血氧饱和度 (SpO2)", "98 %", "状态: 优良安全", "#059669")
-        grid_layout.addWidget(card_spo2, 0, 1)
+        self.card_spo2 = self.create_clickable_card("🫁 血氧饱和度 (SpO2)", "98 %", "状态：优良安全", "#059669", "spo2")
+        grid_layout.addWidget(self.card_spo2, 0, 1)
 
-        # 卡片3：血压监测
-        card_bp = self.create_metric_card(" 血压状况 (Blood Pressure)", "118 / 76 mmHg", "状态: 正常血压范围", "#7C3AED")
-        grid_layout.addWidget(card_bp, 0, 2)
+        self.card_bp = self.create_clickable_card("🩸 血压状况 (Blood Pressure)", "120 / 78 mmHg", "状态：正常范围", "#7C3AED", "bp")
+        grid_layout.addWidget(self.card_bp, 0, 2)
 
-        # 卡片4：今日运动步数
-        card_steps = self.create_metric_card(" 今日活动步数", "3,420 步", "目标达成率: 68% (活跃)", "#D97706")
-        grid_layout.addWidget(card_steps, 1, 0)
+        self.card_steps = self.create_clickable_card("👟 今日活动步数", "3,420 步", "目标达成率：68% (活跃)", "#D97706", "steps")
+        grid_layout.addWidget(self.card_steps, 1, 0)
 
-        # 卡片5：体表温度
-        card_temp = self.create_metric_card("️ 实时体表温度", "36.5 ℃", "状态: 无发热迹象", "#DC2626")
-        grid_layout.addWidget(card_temp, 1, 1)
+        self.card_temp = self.create_clickable_card("🌡️ 实时体表温度", "36.5 ℃", "状态：无发热", "#DC2626", "temperature")
+        grid_layout.addWidget(self.card_temp, 1, 1)
 
-        # 卡片6：智能终端设备电量
-        card_battery = self.create_metric_card(" 穿戴设备剩余电量", "92 %", "状态: 续航充足", "#2563EB")
-        grid_layout.addWidget(card_battery, 1, 2)
+        self.card_battery = self.create_clickable_card("🔋 穿戴设备剩余电量", "92 %", "状态：续航充足", "#2563EB", "battery")
+        grid_layout.addWidget(self.card_battery, 1, 2)
 
         main_layout.addLayout(grid_layout)
 
         # 3. 底部操作区
         btn_layout = QHBoxLayout()
-        btn_refresh = QPushButton(" 刷新最新体征数据")
-        btn_refresh.setStyleSheet("background-color: #334155; color: #F8FAFC; font-weight: bold; padding: 10px 20px;")
-        btn_refresh.clicked.connect(lambda: QMessageBox.information(self, "刷新成功", "已向嵌入式网关发送数据同步指令，当前体征已更新！"))
+        btn_refresh = QPushButton("🔄 刷新最新体征数据")
+        btn_refresh.setStyleSheet("background-color: #334155; color: #F8FAFC; font-weight: bold; padding: 10px 20px; border-radius: 4px;")
+        btn_refresh.clicked.connect(self.refresh_data)
         btn_layout.addWidget(btn_refresh)
+
+        btn_export = QPushButton("📊 导出健康报告")
+        btn_export.setStyleSheet("background-color: #059669; color: #F8FAFC; font-weight: bold; padding: 10px 20px; border-radius: 4px;")
+        btn_export.clicked.connect(self.export_report)
+        btn_layout.addWidget(btn_export)
 
         btn_layout.addStretch()
 
         btn_close = QPushButton("关闭大屏")
-        btn_close.setStyleSheet("background-color: #475569; color: #FFFFFF; font-weight: bold; padding: 10px 20px;")
+        btn_close.setStyleSheet("background-color: #475569; color: #FFFFFF; font-weight: bold; padding: 10px 20px; border-radius: 4px;")
         btn_close.clicked.connect(self.accept)
         btn_layout.addWidget(btn_close)
 
         main_layout.addLayout(btn_layout)
-
-    def create_metric_card(self, title, value, status, accent_color):
+    
+    def create_clickable_card(self, title, value, status, accent_color, metric_key):
+        """创建可点击的指标卡片"""
         card = QFrame()
-        card.setStyleSheet(f"background-color: #1E293B; border-radius: 8px; border-left: 5px solid {accent_color}; border-top: 1px solid #334155; border-right: 1px solid #334155; border-bottom: 1px solid #334155;")
+        card.setCursor(Qt.CursorShape.PointingHandCursor)
+        card.setStyleSheet(f"""
+            background-color: #1E293B; 
+            border-radius: 8px; 
+            border-left: 5px solid {accent_color}; 
+            border-top: 1px solid #334155; 
+            border-right: 1px solid #334155; 
+            border-bottom: 1px solid #334155;
+        """)
         layout = QVBoxLayout(card)
         
         lbl_title = QLabel(title)
@@ -432,8 +589,133 @@ class HealthDashboardDialog(QDialog):
         lbl_status = QLabel(status)
         lbl_status.setStyleSheet("color: #E2E8F0; font-size: 12px; border: none;")
         layout.addWidget(lbl_status)
-
+        
+        # 存储卡片信息
+        card.metric_key = metric_key
+        card.lbl_val = lbl_val
+        card.lbl_status = lbl_status
+        card.accent_color = accent_color
+        
+        # 使用事件过滤器实现点击
+        card.installEventFilter(self)
+        
         return card
+    
+    def start_timer(self):
+        """启动定时刷新"""
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_data)
+        self.timer.start(2000)  # 每 2 秒刷新
+        self.update_data()  # 立即更新一次
+    
+    def update_data(self):
+        """更新所有指标数据"""
+        self.simulator.update()
+        
+        # 更新心率
+        hr = self.simulator.heart_rate
+        hr_status, hr_color = self.simulator.get_status("heart_rate", hr)
+        self.card_hr.lbl_val.setText(f"{hr:.0f} bpm")
+        self.card_hr.lbl_status.setText(f"状态：{hr_status}")
+        if hr_color != "#10B981":
+            self.card_hr.lbl_val.setStyleSheet(f"color: #EF4444; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;")
+            self.play_alarm()
+        else:
+            self.card_hr.lbl_val.setStyleSheet(f"color: {self.card_hr.accent_color}; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;")
+        
+        # 更新血氧
+        spo2 = self.simulator.spo2
+        spo2_status, spo2_color = self.simulator.get_status("spo2", spo2)
+        self.card_spo2.lbl_val.setText(f"{spo2:.1f} %")
+        self.card_spo2.lbl_status.setText(f"状态：{spo2_status}")
+        
+        # 更新血压
+        bp_s = self.simulator.bp_systolic
+        bp_d = self.simulator.bp_diastolic
+        bp_status, bp_color = self.simulator.get_status("bp", (bp_s, bp_d))
+        self.card_bp.lbl_val.setText(f"{bp_s:.0f} / {bp_d:.0f} mmHg")
+        self.card_bp.lbl_status.setText(f"状态：{bp_status}")
+        
+        # 更新步数
+        self.card_steps.lbl_val.setText(f"{self.simulator.steps:.0f} 步")
+        goal_pct = min(100, (self.simulator.steps / 5000) * 100)
+        self.card_steps.lbl_status.setText(f"目标达成率：{goal_pct:.0f}% ({'活跃' if goal_pct > 50 else '待加强'})")
+        
+        # 更新体温
+        temp = self.simulator.temperature
+        temp_status, temp_color = self.simulator.get_status("temperature", temp)
+        self.card_temp.lbl_val.setText(f"{temp:.1f} ℃")
+        self.card_temp.lbl_status.setText(f"状态：{temp_status}")
+        if temp_color != "#10B981":
+            self.card_temp.lbl_val.setStyleSheet(f"color: #EF4444; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;")
+            self.play_alarm()
+        else:
+            self.card_temp.lbl_val.setStyleSheet(f"color: {self.card_temp.accent_color}; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;")
+        
+        # 更新电量
+        battery = self.simulator.battery
+        batt_status, batt_color = self.simulator.get_status("battery", battery)
+        self.card_battery.lbl_val.setText(f"{battery:.1f} %")
+        self.card_battery.lbl_status.setText(f"状态：{batt_status}")
+        if batt_color != "#10B981":
+            self.card_battery.lbl_val.setStyleSheet(f"color: #EF4444; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;")
+        else:
+            self.card_battery.lbl_val.setStyleSheet(f"color: {self.card_battery.accent_color}; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;")
+        
+        # 更新时间戳
+        self.update_time_lbl.setText(f"更新：{datetime.now().strftime('%H:%M:%S')}")
+    
+    def refresh_data(self):
+        """手动刷新"""
+        self.update_data()
+        QMessageBox.information(self, "刷新成功", "体征数据已更新！")
+    
+    def show_trend(self, metric_key):
+        """显示趋势图"""
+        # history 格式：(time, heart_rate, spo2, bp_systolic, bp_diastolic, steps, temperature, battery)
+        metric_map = {
+            "heart_rate": ("实时心率", [(r[0], r[1]) for r in self.simulator.history]),
+            "spo2": ("血氧饱和度", [(r[0], r[2]) for r in self.simulator.history]),
+            "bp": ("收缩压", [(r[0], r[3]) for r in self.simulator.history]),
+            "steps": ("活动步数", [(r[0], r[5]) for r in self.simulator.history]),
+            "temperature": ("体表温度", [(r[0], r[6]) for r in self.simulator.history]),
+            "battery": ("设备电量", [(r[0], r[7]) for r in self.simulator.history]),
+        }
+        if metric_key in metric_map:
+            name, data = metric_map[metric_key]
+            dialog = HealthTrendDialog(name, data, data, self)
+            dialog.exec()
+    
+    def export_report(self):
+        """导出 CSV 报告"""
+        file_name, _ = QFileDialog.getSaveFileName(self, "导出健康报告", "", "CSV Files (*.csv)")
+        if file_name:
+            with open(file_name, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f)
+                writer.writerow(['时间', '心率 (bpm)', '血氧 (%)', '收缩压', '舒张压', '步数', '体温 (℃)', '电量 (%)'])
+                for row in self.simulator.history[-100:]:
+                    t, hr, spo2, bp_s, bp_d, steps, temp, batt = row
+                    writer.writerow([t.strftime("%Y-%m-%d %H:%M:%S"), f"{hr:.0f}", f"{spo2:.1f}", f"{bp_s:.0f}", f"{bp_d:.0f}", f"{steps:.0f}", f"{temp:.1f}", f"{batt:.1f}"])
+            QMessageBox.information(self, "导出成功", f"健康报告已保存到:\n{file_name}")
+    
+    def play_alarm(self):
+        """播放告警音（异常数据时）"""
+        if os.path.exists(self.alarm_sound_path):
+            try:
+                import pygame
+                pygame.mixer.init()
+                pygame.mixer.music.load(self.alarm_sound_path)
+                pygame.mixer.music.play()
+            except Exception:
+                pass
+    
+    def eventFilter(self, obj, event):
+        """事件过滤器：处理卡片点击"""
+        if event.type() == event.Type.MouseButtonPress and hasattr(obj, 'metric_key'):
+            self.show_trend(obj.metric_key)
+            return True
+        return super().eventFilter(obj, event)
+
 
 
 # ==================== 情绪检测弹窗（独立摄像头） ====================
