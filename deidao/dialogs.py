@@ -48,10 +48,22 @@ import random
 import csv
 import io
 from datetime import datetime, timedelta
+from typing import Optional, Dict
+import logging
 import pymysql
 import cv2
 import numpy as np
 from database import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+
+# 设备数据适配器（支持模拟/MQTT/TCP 三种模式）
+try:
+    from device_adapter import (
+        DeviceAdapter, HealthData, create_adapter, load_config,
+        SimulatorAdapter, MQTTAdapter, TCPAdapter
+    )
+    HAS_DEVICE_ADAPTER = True
+except ImportError:
+    HAS_DEVICE_ADAPTER = False
 from PyQt6.QtWidgets import (QDialog, QLabel, QPushButton, QListWidget, QListWidgetItem,
                              QFileDialog, QHBoxLayout, QVBoxLayout, QLineEdit,
                              QMessageBox, QSlider, QCheckBox, QFormLayout, QTextEdit, QGridLayout, QFrame,
@@ -63,6 +75,9 @@ try:
     HAS_WEBENGINE = True
 except ImportError:
     HAS_WEBENGINE = False
+
+# 日志记录器
+logger = logging.getLogger(__name__)
 
 class LoginDialog(QDialog):
     def __init__(self, parent=None):
@@ -398,6 +413,189 @@ class HealthDataSimulator:
         return ("正常", "#10B981")
 
 
+# ==================== 告警管理器 ====================
+
+class AlarmManager:
+    """智能告警管理器：记录告警历史、管理告警状态、统计告警数据"""
+    
+    # 告警级别
+    WARNING = "warning"      # 警告（黄色）
+    CRITICAL = "critical"    # 危险（红色）
+    
+    # 告警类型
+    HEART_RATE = "心率异常"
+    SPO2 = "血氧异常"
+    BLOOD_PRESSURE = "血压异常"
+    TEMPERATURE = "体温异常"
+    BATTERY = "电量不足"
+    
+    def __init__(self):
+        self.alarms = []  # 告警记录列表
+        self.max_alarms = 500  # 最大保留记录数
+        self.is_muted = False  # 是否静音
+        self.alarm_count = {
+            self.WARNING: 0,
+            self.CRITICAL: 0
+        }
+        self.alarm_type_count = {}
+        self.last_alarm_time = None
+        self.alarm_cooldown = 5  # 同类告警冷却时间（秒）
+        self._last_alarm_by_type = {}  # 每种类型的最后告警时间
+    
+    def check_and_record(self, metric, value, status_text, status_color):
+        """检查指标并记录告警（带冷却机制）
+        
+        Args:
+            metric: 指标类型（如 "heart_rate"）
+            value: 当前值
+            status_text: 状态文本
+            status_color: 状态颜色
+        """
+        if status_color == "#10B981":  # 正常颜色，不告警
+            return None
+        
+        # 确定告警级别
+        level = self.CRITICAL if status_color == "#EF4444" else self.WARNING
+        
+        # 确定告警类型
+        alarm_type_map = {
+            "heart_rate": self.HEART_RATE,
+            "spo2": self.SPO2,
+            "bp": self.BLOOD_PRESSURE,
+            "temperature": self.TEMPERATURE,
+            "battery": self.BATTERY
+        }
+        alarm_type = alarm_type_map.get(metric, "未知异常")
+        
+        # 冷却检查
+        now = datetime.now()
+        last_time = self._last_alarm_by_type.get(alarm_type)
+        if last_time and (now - last_time).total_seconds() < self.alarm_cooldown:
+            return None  # 冷却期内，不重复告警
+        
+        # 记录告警
+        alarm_record = {
+            "time": now,
+            "metric": metric,
+            "alarm_type": alarm_type,
+            "level": level,
+            "value": value,
+            "status": status_text,
+            "color": status_color
+        }
+        
+        self.alarms.append(alarm_record)
+        if len(self.alarms) > self.max_alarms:
+            self.alarms.pop(0)
+        
+        # 更新统计
+        self.alarm_count[level] += 1
+        self.alarm_type_count[alarm_type] = self.alarm_type_count.get(alarm_type, 0) + 1
+        self.last_alarm_time = now
+        self._last_alarm_by_type[alarm_type] = now
+        
+        return alarm_record
+    
+    def get_recent_alarms(self, count=20):
+        """获取最近的告警记录"""
+        return self.alarms[-count:] if self.alarms else []
+    
+    def get_alarm_stats(self):
+        """获取告警统计"""
+        return {
+            "total": len(self.alarms),
+            "warning": self.alarm_count[self.WARNING],
+            "critical": self.alarm_count[self.CRITICAL],
+            "by_type": dict(self.alarm_type_count),
+            "last_alarm": self.last_alarm_time
+        }
+    
+    def clear_alarms(self):
+        """清空告警记录"""
+        self.alarms.clear()
+        self.alarm_count = {self.WARNING: 0, self.CRITICAL: 0}
+        self.alarm_type_count.clear()
+        self.last_alarm_time = None
+        self._last_alarm_by_type.clear()
+    
+    def toggle_mute(self):
+        """切换静音状态"""
+        self.is_muted = not self.is_muted
+        return self.is_muted
+
+
+# ==================== 告警弹窗 ====================
+
+class AlarmPopupDialog(QDialog):
+    """告警弹窗通知"""
+    
+    def __init__(self, alarm_record, parent=None):
+        super().__init__(parent)
+        self.alarm = alarm_record
+        self.initUI()
+    
+    def initUI(self):
+        self.setWindowTitle("⚠️ 健康告警通知")
+        self.resize(400, 250)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # 告警级别标识
+        is_critical = self.alarm["level"] == AlarmManager.CRITICAL
+        level_color = "#EF4444" if is_critical else "#F59E0B"
+        level_text = "🔴 危险告警" if is_critical else "🟡 警告提示"
+        
+        level_lbl = QLabel(level_text)
+        level_lbl.setStyleSheet(f"color: {level_color}; font-size: 18px; font-weight: bold;")
+        level_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(level_lbl)
+        
+        # 分隔线
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet(f"background-color: {level_color};")
+        layout.addWidget(line)
+        
+        # 告警详情
+        detail_frame = QFrame()
+        detail_frame.setStyleSheet("background-color: #1E293B; border-radius: 8px; padding: 15px;")
+        detail_layout = QVBoxLayout(detail_frame)
+        
+        time_lbl = QLabel(f"⏰ 时间：{self.alarm['time'].strftime('%Y-%m-%d %H:%M:%S')}")
+        time_lbl.setStyleSheet("color: #94A3B8; font-size: 13px;")
+        detail_layout.addWidget(time_lbl)
+        
+        type_lbl = QLabel(f"📋 类型：{self.alarm['alarm_type']}")
+        type_lbl.setStyleSheet("color: #F8FAFC; font-size: 14px; font-weight: bold;")
+        detail_layout.addWidget(type_lbl)
+        
+        value_lbl = QLabel(f"📊 当前值：{self.alarm['value']}")
+        value_lbl.setStyleSheet("color: #38BDF8; font-size: 14px;")
+        detail_layout.addWidget(value_lbl)
+        
+        status_lbl = QLabel(f"💡 状态：{self.alarm['status']}")
+        status_lbl.setStyleSheet(f"color: {self.alarm['color']}; font-size: 13px;")
+        detail_layout.addWidget(status_lbl)
+        
+        layout.addWidget(detail_frame)
+        
+        # 建议
+        advice_lbl = QLabel("💊 建议：请及时关注老人健康状况，必要时联系家属或医护人员。")
+        advice_lbl.setStyleSheet("color: #E2E8F0; font-size: 12px; padding: 10px; background-color: #334155; border-radius: 4px;")
+        advice_lbl.setWordWrap(True)
+        layout.addWidget(advice_lbl)
+        
+        layout.addStretch()
+        
+        # 确认按钮
+        btn_ok = QPushButton("我知道了")
+        btn_ok.setStyleSheet(f"background-color: {level_color}; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
+        btn_ok.clicked.connect(self.accept)
+        layout.addWidget(btn_ok)
+
+
 # ==================== 健康趋势图弹窗 ====================
 
 class HealthTrendDialog(QDialog):
@@ -481,14 +679,32 @@ class HealthTrendDialog(QDialog):
 
 class HealthDashboardDialog(QDialog):
     """️ 专属老人健康指标可视化大屏弹窗（动态数据 + ECharts 趋势图）"""
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, device_config: Optional[Dict] = None):
         super().__init__(parent)
         self.setWindowTitle(" 智能养老 - 老人健康指标可视化监控大屏")
-        self.resize(1200, 750)
-        self.simulator = HealthDataSimulator()
-        self.alarm_sound_path = os.path.join(os.path.dirname(__file__), 'alarm.mp3')
+        self.resize(1200, 850)  # 增加高度以容纳告警面板
+        
+        # 加载设备配置
+        if device_config is None:
+            if HAS_DEVICE_ADAPTER:
+                self.device_config = load_config()
+            else:
+                self.device_config = {"mode": "simulator"}
+        else:
+            self.device_config = device_config
+        
+        # 初始化数据源（优先使用设备适配器）
+        self.device_adapter = None
+        self.simulator = None
+        if HAS_DEVICE_ADAPTER:
+            self.device_adapter = create_adapter(self.device_config)
+        else:
+            self.simulator = HealthDataSimulator()
+        
+        self.alarm_manager = AlarmManager()
+        self.alarm_sound_path = os.path.join(os.path.dirname(__file__), 'health_alarm.mp3')
         self.initUI()
-        self.start_timer()
+        self.start_data_source()
 
     def initUI(self):
         main_layout = QVBoxLayout(self)
@@ -507,7 +723,9 @@ class HealthDashboardDialog(QDialog):
         top_layout.addStretch()
         
         # 设备连接状态
-        self.device_status_lbl = QLabel("📡 已连接：智能手环 Pro (模拟)")
+        mode_name = self.device_config.get("mode", "simulator")
+        mode_display = {"simulator": "模拟", "mqtt": "MQTT", "tcp": "TCP"}.get(mode_name, mode_name)
+        self.device_status_lbl = QLabel(f"📡 数据源：{mode_display}模式")
         self.device_status_lbl.setStyleSheet("color: #10B981; font-size: 13px; border: none;")
         top_layout.addWidget(self.device_status_lbl)
         
@@ -543,7 +761,59 @@ class HealthDashboardDialog(QDialog):
 
         main_layout.addLayout(grid_layout)
 
-        # 3. 底部操作区
+        # 3. 告警记录面板
+        alarm_panel = QFrame()
+        alarm_panel.setStyleSheet("background-color: #1E293B; border-radius: 8px; border: 1px solid #334155;")
+        alarm_layout = QVBoxLayout(alarm_panel)
+        alarm_layout.setContentsMargins(15, 10, 15, 10)
+        
+        # 告警面板标题栏
+        alarm_header = QHBoxLayout()
+        alarm_title = QLabel("📋 告警记录")
+        alarm_title.setStyleSheet("color: #38BDF8; font-size: 14px; font-weight: bold; border: none;")
+        alarm_header.addWidget(alarm_title)
+        
+        alarm_header.addStretch()
+        
+        # 告警统计
+        self.alarm_stats_lbl = QLabel("总计: 0 | 警告: 0 | 危险: 0")
+        self.alarm_stats_lbl.setStyleSheet("color: #94A3B8; font-size: 12px; border: none;")
+        alarm_header.addWidget(self.alarm_stats_lbl)
+        
+        # 静音按钮
+        self.mute_btn = QPushButton("🔔 声音开启")
+        self.mute_btn.setStyleSheet("background-color: #059669; color: white; padding: 5px 12px; border-radius: 4px; font-size: 12px;")
+        self.mute_btn.clicked.connect(self.toggle_mute)
+        alarm_header.addWidget(self.mute_btn)
+        
+        # 清空按钮
+        clear_btn = QPushButton("🗑️ 清空记录")
+        clear_btn.setStyleSheet("background-color: #475569; color: white; padding: 5px 12px; border-radius: 4px; font-size: 12px;")
+        clear_btn.clicked.connect(self.clear_alarms)
+        alarm_header.addWidget(clear_btn)
+        
+        alarm_layout.addLayout(alarm_header)
+        
+        # 告警列表（使用 QTextEdit 显示）
+        self.alarm_list = QTextEdit()
+        self.alarm_list.setReadOnly(True)
+        self.alarm_list.setMaximumHeight(120)
+        self.alarm_list.setStyleSheet("""
+            QTextEdit {
+                background-color: #0F172A;
+                color: #E2E8F0;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                font-size: 12px;
+                font-family: Consolas, monospace;
+            }
+        """)
+        self.alarm_list.setPlaceholderText("暂无告警记录...")
+        alarm_layout.addWidget(self.alarm_list)
+        
+        main_layout.addWidget(alarm_panel)
+
+        # 4. 底部操作区
         btn_layout = QHBoxLayout()
         btn_refresh = QPushButton("🔄 刷新最新体征数据")
         btn_refresh.setStyleSheet("background-color: #334155; color: #F8FAFC; font-weight: bold; padding: 10px 20px; border-radius: 4px;")
@@ -554,6 +824,12 @@ class HealthDashboardDialog(QDialog):
         btn_export.setStyleSheet("background-color: #059669; color: #F8FAFC; font-weight: bold; padding: 10px 20px; border-radius: 4px;")
         btn_export.clicked.connect(self.export_report)
         btn_layout.addWidget(btn_export)
+        
+        # 告警统计按钮
+        btn_alarm_stats = QPushButton("📈 告警统计")
+        btn_alarm_stats.setStyleSheet("background-color: #7C3AED; color: #F8FAFC; font-weight: bold; padding: 10px 20px; border-radius: 4px;")
+        btn_alarm_stats.clicked.connect(self.show_alarm_stats)
+        btn_layout.addWidget(btn_alarm_stats)
 
         btn_layout.addStretch()
 
@@ -601,12 +877,62 @@ class HealthDashboardDialog(QDialog):
         
         return card
     
+    def start_data_source(self):
+        """启动数据源（根据配置选择模拟或真实设备）"""
+        if self.device_adapter:
+            # 使用设备适配器
+            self.device_adapter.on_data(self._on_device_data)
+            self.device_adapter.on_error(self._on_device_error)
+            if self.device_adapter.connect():
+                self.device_adapter.start()
+                self.device_status_lbl.setText(f"📡 数据源：{self.device_adapter.mode_name} - 已连接")
+            else:
+                self.device_status_lbl.setText(f"📡 数据源：{self.device_adapter.mode_name} - 连接失败")
+                # 回退到模拟模式
+                self._fallback_to_simulator()
+        else:
+            # 使用模拟器
+            self.start_timer()
+    
     def start_timer(self):
-        """启动定时刷新"""
+        """启动定时刷新（模拟模式）"""
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_data)
         self.timer.start(2000)  # 每 2 秒刷新
         self.update_data()  # 立即更新一次
+    
+    def _on_device_data(self, data: HealthData):
+        """处理设备适配器传来的数据"""
+        # 更新模拟器数据（用于历史趋势图）
+        if self.simulator is None:
+            self.simulator = HealthDataSimulator()
+        
+        self.simulator.heart_rate = data.heart_rate
+        self.simulator.spo2 = data.spo2
+        self.simulator.bp_systolic = data.bp_systolic
+        self.simulator.bp_diastolic = data.bp_diastolic
+        self.simulator.steps = data.steps
+        self.simulator.temperature = data.temperature
+        self.simulator.battery = data.battery
+        self.simulator.history.append((
+            data.timestamp, data.heart_rate, data.spo2,
+            data.bp_systolic, data.bp_diastolic, data.steps,
+            data.temperature, data.battery
+        ))
+        
+        # 更新 UI
+        self.update_data()
+    
+    def _on_device_error(self, message: str):
+        """处理设备适配器错误"""
+        logger.warning(f"设备适配器错误: {message}")
+        self.device_status_lbl.setText(f"📡 数据源：错误 - {message}")
+    
+    def _fallback_to_simulator(self):
+        """回退到模拟模式"""
+        logger.info("回退到模拟模式")
+        self.simulator = HealthDataSimulator()
+        self.start_timer()
     
     def update_data(self):
         """更新所有指标数据"""
@@ -619,7 +945,9 @@ class HealthDashboardDialog(QDialog):
         self.card_hr.lbl_status.setText(f"状态：{hr_status}")
         if hr_color != "#10B981":
             self.card_hr.lbl_val.setStyleSheet(f"color: #EF4444; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;")
-            self.play_alarm()
+            alarm = self.alarm_manager.check_and_record("heart_rate", f"{hr:.0f} bpm", hr_status, hr_color)
+            if alarm:
+                self.handle_alarm(alarm)
         else:
             self.card_hr.lbl_val.setStyleSheet(f"color: {self.card_hr.accent_color}; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;")
         
@@ -628,6 +956,10 @@ class HealthDashboardDialog(QDialog):
         spo2_status, spo2_color = self.simulator.get_status("spo2", spo2)
         self.card_spo2.lbl_val.setText(f"{spo2:.1f} %")
         self.card_spo2.lbl_status.setText(f"状态：{spo2_status}")
+        if spo2_color != "#10B981":
+            alarm = self.alarm_manager.check_and_record("spo2", f"{spo2:.1f}%", spo2_status, spo2_color)
+            if alarm:
+                self.handle_alarm(alarm)
         
         # 更新血压
         bp_s = self.simulator.bp_systolic
@@ -635,6 +967,10 @@ class HealthDashboardDialog(QDialog):
         bp_status, bp_color = self.simulator.get_status("bp", (bp_s, bp_d))
         self.card_bp.lbl_val.setText(f"{bp_s:.0f} / {bp_d:.0f} mmHg")
         self.card_bp.lbl_status.setText(f"状态：{bp_status}")
+        if bp_color != "#10B981":
+            alarm = self.alarm_manager.check_and_record("bp", f"{bp_s:.0f}/{bp_d:.0f}", bp_status, bp_color)
+            if alarm:
+                self.handle_alarm(alarm)
         
         # 更新步数
         self.card_steps.lbl_val.setText(f"{self.simulator.steps:.0f} 步")
@@ -648,7 +984,9 @@ class HealthDashboardDialog(QDialog):
         self.card_temp.lbl_status.setText(f"状态：{temp_status}")
         if temp_color != "#10B981":
             self.card_temp.lbl_val.setStyleSheet(f"color: #EF4444; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;")
-            self.play_alarm()
+            alarm = self.alarm_manager.check_and_record("temperature", f"{temp:.1f}℃", temp_status, temp_color)
+            if alarm:
+                self.handle_alarm(alarm)
         else:
             self.card_temp.lbl_val.setStyleSheet(f"color: {self.card_temp.accent_color}; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;")
         
@@ -659,11 +997,17 @@ class HealthDashboardDialog(QDialog):
         self.card_battery.lbl_status.setText(f"状态：{batt_status}")
         if batt_color != "#10B981":
             self.card_battery.lbl_val.setStyleSheet(f"color: #EF4444; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;")
+            alarm = self.alarm_manager.check_and_record("battery", f"{battery:.1f}%", batt_status, batt_color)
+            if alarm:
+                self.handle_alarm(alarm)
         else:
             self.card_battery.lbl_val.setStyleSheet(f"color: {self.card_battery.accent_color}; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;")
         
         # 更新时间戳
         self.update_time_lbl.setText(f"更新：{datetime.now().strftime('%H:%M:%S')}")
+        
+        # 更新告警统计显示
+        self.update_alarm_stats_display()
     
     def refresh_data(self):
         """手动刷新"""
@@ -699,7 +1043,9 @@ class HealthDashboardDialog(QDialog):
             QMessageBox.information(self, "导出成功", f"健康报告已保存到:\n{file_name}")
     
     def play_alarm(self):
-        """播放告警音（异常数据时）"""
+        """播放告警音（异常数据时，受静音控制）"""
+        if self.alarm_manager.is_muted:
+            return
         if os.path.exists(self.alarm_sound_path):
             try:
                 import pygame
@@ -708,6 +1054,89 @@ class HealthDashboardDialog(QDialog):
                 pygame.mixer.music.play()
             except Exception:
                 pass
+    
+    def handle_alarm(self, alarm_record):
+        """处理告警：播放声音 + 显示弹窗 + 更新列表"""
+        # 播放告警音
+        self.play_alarm()
+        
+        # 显示告警弹窗（仅危险级别）—— 暂时注释掉，避免频繁弹窗
+        # if alarm_record["level"] == AlarmManager.CRITICAL:
+        #     popup = AlarmPopupDialog(alarm_record, self)
+        #     popup.exec()
+        
+        # 更新告警列表显示
+        self.update_alarm_list()
+    
+    def update_alarm_list(self):
+        """更新告警列表显示"""
+        recent = self.alarm_manager.get_recent_alarms(10)
+        if not recent:
+            self.alarm_list.setPlainText("暂无告警记录...")
+            return
+        
+        lines = []
+        for alarm in reversed(recent):
+            level_icon = "🔴" if alarm["level"] == AlarmManager.CRITICAL else "🟡"
+            time_str = alarm["time"].strftime("%H:%M:%S")
+            lines.append(f"{level_icon} [{time_str}] {alarm['alarm_type']}: {alarm['value']} - {alarm['status']}")
+        
+        self.alarm_list.setPlainText("\n".join(lines))
+    
+    def update_alarm_stats_display(self):
+        """更新告警统计显示"""
+        stats = self.alarm_manager.get_alarm_stats()
+        self.alarm_stats_lbl.setText(
+            f"总计: {stats['total']} | 警告: {stats['warning']} | 危险: {stats['critical']}"
+        )
+    
+    def toggle_mute(self):
+        """切换静音状态"""
+        is_muted = self.alarm_manager.toggle_mute()
+        if is_muted:
+            self.mute_btn.setText("🔕 声音关闭")
+            self.mute_btn.setStyleSheet("background-color: #EF4444; color: white; padding: 5px 12px; border-radius: 4px; font-size: 12px;")
+        else:
+            self.mute_btn.setText("🔔 声音开启")
+            self.mute_btn.setStyleSheet("background-color: #059669; color: white; padding: 5px 12px; border-radius: 4px; font-size: 12px;")
+    
+    def clear_alarms(self):
+        """清空告警记录"""
+        reply = QMessageBox.question(
+            self, "确认清空", "确定要清空所有告警记录吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.alarm_manager.clear_alarms()
+            self.alarm_list.setPlainText("暂无告警记录...")
+            self.update_alarm_stats_display()
+            QMessageBox.information(self, "已清空", "告警记录已清空！")
+    
+    def show_alarm_stats(self):
+        """显示告警统计详情"""
+        stats = self.alarm_manager.get_alarm_stats()
+        
+        msg = f"""📊 告警统计报告
+
+总告警数：{stats['total']}
+警告级别：{stats['warning']} 次
+危险级别：{stats['critical']} 次
+
+告警类型分布：
+"""
+        if stats['by_type']:
+            for alarm_type, count in sorted(stats['by_type'].items(), key=lambda x: -x[1]):
+                msg += f"  • {alarm_type}: {count} 次\n"
+        else:
+            msg += "  暂无数据\n"
+        
+        if stats['last_alarm']:
+            msg += f"\n最后告警：{stats['last_alarm'].strftime('%Y-%m-%d %H:%M:%S')}"
+        else:
+            msg += "\n最后告警：无"
+        
+        QMessageBox.information(self, "告警统计", msg)
     
     def eventFilter(self, obj, event):
         """事件过滤器：处理卡片点击"""

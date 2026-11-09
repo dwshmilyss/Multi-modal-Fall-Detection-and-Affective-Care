@@ -1,0 +1,45 @@
+{
+  "mqtt": {
+    "_topic_format": "订阅主题：{topic_prefix}/{device_id}/health",
+    "topic_prefix": "health",
+    "_comment": "MQTT 模式配置（接入真实智能手环/传感器）",
+    "broker": "localhost",
+    "port": 1883,
+    "device_id": "band_001",
+    "username": "",
+    "password": "",
+    "client_id": "health_monitor_client"
+  },
+  "mode": "huawei_band",
+  "_comment": "设备数据适配器配置文件",
+  "simulator": {
+    "update_interval_ms": 2000,
+    "_comment": "模拟模式配置（当前使用）"
+  },
+  "_description": "mode 可选值：simulator (模拟模式), mqtt (MQTT 模式), tcp (TCP 模式), huawei_band (华为手环模式)",
+  "update_interval_ms": 2000,
+  "huawei_band": {
+    "mqtt": {
+      "username": "",
+      "client_id": "huawei_band_client",
+      "port": 1883,
+      "topic_prefix": "gadgetbridge",
+      "broker": "localhost",
+      "password": "",
+      "device_id": "huawei_band_001"
+    },
+    "user_profile": {
+      "resting_hr": 70,
+      "age": 65,
+      "gender": "male",
+      "_comment": "用户档案（用于血压估算）"
+    },
+    "_comment": "华为手环模式配置（基于 Gadgetbridge + MQTT）"
+  },
+  "tcp": {
+    "port": 9527,
+    "_protocol": "设备主动推送 JSON 数据，每行一条，格式见 DEVICE_INTEGRATION.md",
+    "host": "0.0.0.0",
+    "_comment": "TCP 模式配置（接入自定义设备）"
+  }
+}

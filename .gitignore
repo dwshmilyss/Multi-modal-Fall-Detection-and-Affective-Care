@@ -37,6 +37,7 @@ model/vosk-model-*/
 msyh.ttc
 simhei.ttf
 alarm.mp3
+health_alarm.mp3
 
 # ============== 视频输入 / 输出 ==============
 video/*.mp4
