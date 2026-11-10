@@ -446,8 +446,16 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def select_video_file(self):
         file_name, _ = QFileDialog.getOpenFileName(self, "选择视频文件", "", "Video Files (*.mp4 *.avi *.mov)")
         if file_name:
-            self.video_source = file_name
-            self.add_log(f"已选择本地测试视频: {file_name.split('/')[-1]}")
+            # 验证文件是否可以读取
+            import cv2
+            cap = cv2.VideoCapture(file_name)
+            if cap.isOpened():
+                cap.release()
+                self.video_source = file_name
+                self.add_log(f"已选择本地测试视频: {file_name.split('/')[-1]}")
+                QMessageBox.information(self, "导入成功", f"视频文件已成功导入！\n\n{file_name.split('/')[-1]}")
+            else:
+                QMessageBox.critical(self, "导入失败", "无法读取该视频文件，请确认文件格式是否正确或文件是否损坏。")
 
     def open_history_dialog(self):
         dialog = HistoryDialog(self)

@@ -2421,6 +2421,7 @@ class AISmartDialog(QDialog):
         self.resize(820, 620)
         self._voice_worker = None
         self._voice_suppress_until = 0.0  # send_text() 后短时间内忽略 voice partial 覆盖输入框
+        self._voice_was_running_before_tts = False  # TTS 期间暂停语音识别的标志
         self._chat_history = []
         self._current_model_mode = "kimi"  # "kimi" 或 "local"
         self.initUI()
@@ -2459,7 +2460,7 @@ class AISmartDialog(QDialog):
         model_row = QHBoxLayout()
         model_row.addWidget(QLabel("AI 模型:"))
         self.model_combo = QComboBox()
-        self.model_combo.addItems(["☁️ 云端 Kimi 大模型", "💻 本地 Ollama 大模型"])
+        self.model_combo.addItems(["☁️ 云端大模型", "💻 本地 Ollama 大模型"])
         self.model_combo.setStyleSheet(
             "QComboBox { background-color: #1E293B; border: 1px solid #475569; border-radius: 6px; "
             "color: #F8FAFC; padding: 6px 10px; font-size: 13px; }"
@@ -2575,12 +2576,13 @@ class AISmartDialog(QDialog):
             )
             self.lbl_model_status.setText(f"本地: {AISmartDialog._local_model}")
             self.lbl_model_status.setStyleSheet("color: #10B981; font-size: 11px;")
-        else:  # 云端 Kimi
+        else:  # 云端大模型（动态读取配置）
+            cloud_model = _get_cloud_model_name()
             self.tip.setText(
-                " 当前使用云端 Kimi 大模型（kimi-k2.6），需要联网。\n"
-                "   请确保网络通畅；也可切换到本地 Ollama 模型离线使用。"
+                f" 当前使用云端大模型（{cloud_model}），需要联网。\n"
+                f"   请确保网络通畅；也可切换到本地 Ollama 模型离线使用。"
             )
-            self.lbl_model_status.setText("云端: Kimi")
+            self.lbl_model_status.setText(f"云端: {cloud_model}")
             self.lbl_model_status.setStyleSheet("color: #38BDF8; font-size: 11px;")
 
     def _on_model_changed(self, index):
@@ -2813,6 +2815,50 @@ class AISmartDialog(QDialog):
                 self._tts_worker.stop()
         except Exception:
             pass
+        # TTS 被手动停止时，恢复语音识别
+        self._resume_voice_after_tts()
+
+    def _pause_voice_for_tts(self):
+        """TTS 开始朗读时暂停语音识别，避免麦克风拾取 TTS 声音造成回声。"""
+        try:
+            if self._voice_worker is not None and self._voice_worker.isRunning():
+                self._voice_worker.stop()
+                self._voice_worker.wait(300)
+                self._voice_was_running_before_tts = True
+            else:
+                self._voice_was_running_before_tts = False
+        except Exception:
+            self._voice_was_running_before_tts = False
+
+    def _resume_voice_after_tts(self):
+        """TTS 结束后恢复语音识别（如果之前正在运行）。"""
+        try:
+            if getattr(self, '_voice_was_running_before_tts', False):
+                self._voice_was_running_before_tts = False
+                # 延迟一小段时间再恢复，避免 TTS 尾音被识别
+                QTimer.singleShot(500, self._do_resume_voice)
+        except Exception:
+            pass
+
+    def _do_resume_voice(self):
+        """实际恢复语音识别的延迟回调。"""
+        try:
+            if self._voice_worker is None or not self._voice_worker.isRunning():
+                engine = "vosk" if self.engine_combo.currentIndex() == 1 else "google"
+                self.btn_voice.setText(" 停止说话")
+                self.btn_voice.setStyleSheet("background-color: #DC2626; color: #FFFFFF; font-weight: bold; padding: 10px 20px; font-size: 14px;")
+                self.btn_voice.setEnabled(True)
+                self.lbl_voice_status.setText(" 正在聆听... 边说会边显示在输入框")
+                self.lbl_voice_status.setStyleSheet("color: #F59E0B; font-size: 12px; font-weight: bold;")
+                self._voice_worker = _VoiceRecognitionWorker(engine=engine, duration=60)
+                self._voice_worker.partial_signal.connect(self._on_voice_partial)
+                self._voice_worker.text_signal.connect(self._on_voice_text)
+                self._voice_worker.error_signal.connect(self._on_voice_error)
+                self._voice_worker.status_signal.connect(self._on_voice_status)
+                self._voice_worker.finished.connect(self._on_voice_finished)
+                self._voice_worker.start()
+        except Exception:
+            pass
 
     def _speak(self, text):
         """启动 TTS 后台线程朗读一段文字。
@@ -2821,6 +2867,8 @@ class AISmartDialog(QDialog):
         导致"AI 回复后只读一句（上一条尾巴），第二条再读就哑火"。
         现在改为：打断旧 worker → 短暂等待旧 worker 退出 → 启动新 worker。
         主线程不调用 engine，仅设 _stop_flag（同线程才会立即响应）。
+        
+        修复回声 bug：TTS 朗读时暂停语音识别，避免麦克风把 TTS 声音识别为输入。
         """
         if not text:
             return
@@ -2836,6 +2884,9 @@ class AISmartDialog(QDialog):
                 self._tts_worker.wait(500)
         except Exception:
             pass
+
+        # 修复回声 bug：TTS 朗读期间暂停语音识别，避免麦克风拾取 TTS 声音
+        self._pause_voice_for_tts()
 
         # 启动新 worker
         self._tts_worker = _TTSWorker(text)
@@ -2864,6 +2915,8 @@ class AISmartDialog(QDialog):
             if msg == "正在朗读…":
                 self.lbl_tts_status.setText("朗读已结束")
                 self.lbl_tts_status.setStyleSheet("color: #64748B; font-size: 11px; border: none;")
+            # TTS 自然结束时，恢复语音识别
+            self._resume_voice_after_tts()
 
     def _on_ai_done(self, answer):
         try:
@@ -2892,43 +2945,73 @@ class AISmartDialog(QDialog):
         self._ai_worker = None
 
 
-# ==================== Kimi AI 配置 ====================
-# API Key 读取顺序：1) 环境变量 KIMI_API_KEY  2) 同目录 config_kimi.txt（仅含 key 的纯文本文件）
-# config_kimi.txt 内容示例（无引号、无空格，仅一行 key）：
-#   sk-fSjkBoXTA5x0gR3qzjmEIAvMB7CFY2dhXTe1u5dGvLrk1c9t
+# ==================== 云端大模型配置 ====================
+# 配置读取顺序：1) 环境变量 CLOUD_API_KEY 覆盖 Key
+#              2) 同目录 config_.txt（三行格式：Key / Base URL / 模型名）
+# config_ai.txt 内容示例：
+#   sk-xxxxxxxxxxxx
+#   https://coding.dashscope.aliyuncs.com/v1
+#   qwen3.7-plus
 
-def _load_kimi_key():
-    key = os.environ.get("KIMI_API_KEY", "").strip()
-    if key:
-        return key
-    cfg_path = os.path.join(os.path.dirname(__file__), "config_kimi.txt")
+_CLOUD_CFG_PATH = os.path.join(os.path.dirname(__file__), "config_ai.txt")
+_CLOUD_CACHE = {"key": None, "base_url": None, "model": None, "loaded": False}
+
+
+def _load_cloud_config():
+    """从 config_ai.txt 读取云端模型配置（Key / Base URL / 模型名），带缓存。"""
+    if _CLOUD_CACHE["loaded"]:
+        return _CLOUD_CACHE
+    _CLOUD_CACHE["loaded"] = True
+    # 默认值（DashScope Qwen）
+    _CLOUD_CACHE["key"] = os.environ.get("CLOUD_API_KEY", "") or os.environ.get("QWEN_API_KEY", "")
+    _CLOUD_CACHE["base_url"] = "https://coding.dashscope.aliyuncs.com/v1"
+    _CLOUD_CACHE["model"] = "qwen3.7-plus"
     try:
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            return f.read().strip()
+        with open(_CLOUD_CFG_PATH, "r", encoding="utf-8") as f:
+            lines = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+        if len(lines) >= 1 and lines[0]:
+            _CLOUD_CACHE["key"] = os.environ.get("CLOUD_API_KEY", "") or os.environ.get("QWEN_API_KEY", "") or lines[0]
+        if len(lines) >= 2 and lines[1]:
+            _CLOUD_CACHE["base_url"] = lines[1]
+        if len(lines) >= 3 and lines[2]:
+            _CLOUD_CACHE["model"] = lines[2]
     except Exception:
-        return ""
+        pass
+    return _CLOUD_CACHE
 
-# kimi配置  这里可以替换为其他模型，只要符合OpenAI标准即可
-# _KIMI_API_KEY = _load_kimi_key()
-# _KIMI_BASE_URL = "https://api.moonshot.cn/v1"
-# _KIMI_MODEL = "kimi-k2.6"
 
-_KIMI_API_KEY = os.environ.get("QWEN_API_KEY", "")
-_KIMI_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1"
-_KIMI_MODEL = "qwen3.7-plus"
+def _get_cloud_model_name():
+    """获取当前云端模型名称（用于 UI 显示）。"""
+    cfg = _load_cloud_config()
+    return cfg["model"]
 
+
+def _get_cloud_api_key():
+    """获取当前云端 API Key。"""
+    return _load_cloud_config()["key"]
+
+
+def _get_cloud_base_url():
+    """获取当前云端 API Base URL。"""
+    return _load_cloud_config()["base_url"]
+
+
+def _reload_cloud_config():
+    """强制重新加载云端配置（用户在配置弹窗保存后调用）。"""
+    _CLOUD_CACHE["loaded"] = False
+    return _load_cloud_config()
 
 
 def _kimi_chat(messages, api_key=None):
-    """调用月之暗面 Kimi 大模型，返回回复文本；失败返回 None。"""
-    key = api_key or _KIMI_API_KEY
+    """调用云端大模型（OpenAI 兼容接口），返回回复文本；失败返回 None。"""
+    key = api_key or _get_cloud_api_key()
     if not key:
         return None
     try:
         import urllib.request, json
-        url = f"{_KIMI_BASE_URL}/chat/completions"
+        url = f"{_get_cloud_base_url()}/chat/completions"
         payload = json.dumps({
-            "model": _KIMI_MODEL,
+            "model": _get_cloud_model_name(),
             "messages": messages,
         }).encode("utf-8")
         req = urllib.request.Request(
@@ -3088,7 +3171,7 @@ def answer_question(question, history=None, visual_emotion_cn=None, text_emotion
             return reply.strip()
 
     # 云端模式调 Kimi
-    if model_mode == "kimi" and _KIMI_API_KEY:
+    if model_mode == "kimi" and _get_cloud_api_key():
         reply = _kimi_chat(messages)
         if reply:
             return reply.strip()
@@ -3131,7 +3214,7 @@ def answer_question(question, history=None, visual_emotion_cn=None, text_emotion
     elif fused == "高兴":
         fallback += "听到您心情这么好，我也替您开心。"
     else:
-        fallback += "目前本地规则模板能覆盖的问题有限，如果配置了 Kimi API Key 会给您更贴心的回答哦。"
+        fallback += "目前本地规则模板能覆盖的问题有限，如果配置了云端 API Key 会给您更贴心的回答哦。"
 
     return fallback
 

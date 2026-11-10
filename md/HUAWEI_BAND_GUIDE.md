@@ -100,7 +100,7 @@ Gadgetbridge 推送的 JSON 数据格式示例：
 
 ### 4.1 修改设备配置文件
 
-编辑 `deidao/device_config.json`：
+编辑 `../deidao/device_config.json`：
 
 ```json
 {
@@ -261,9 +261,9 @@ python deidao/main.py
 
 | 文件 | 说明 |
 |------|------|
-| `deidao/device_adapter.py` | 设备适配器框架（含血压估算算法） |
-| `deidao/device_config.json` | 设备配置文件 |
-| `deidao/dialogs.py` | 健康大屏对话框（集成设备适配器） |
+| `../deidao/device_adapter.py` | 设备适配器框架（含血压估算算法） |
+| `../deidao/device_config.json` | 设备配置文件 |
+| `../deidao/dialogs.py` | 健康大屏对话框（集成设备适配器） |
 | `HUAWEI_BAND_GUIDE.md` | 本指南 |
 | `DEVICE_INTEGRATION.md` | 通用设备接入文档 |
 

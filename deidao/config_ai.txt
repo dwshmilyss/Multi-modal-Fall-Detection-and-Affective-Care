@@ -1,0 +1,7 @@
+# 云端大模型配置（三行格式，不要删除 # 注释行）
+# 第1行：API Key
+# 第2行：API Base URL（OpenAI 兼容格式）
+# 第3行：模型名称
+sk-sp-acec163a7ad845cda8508e7ff9155b08
+https://coding.dashscope.aliyuncs.com/v1
+qwen3.7-plus

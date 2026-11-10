@@ -29,6 +29,11 @@ env/
 *.weights
 *.engine
 *.pkl
+qingxu/Emotion-Detection-1
+qingxu/dataset
+qingxu/runs
+deidao/result
+test_videos
 
 # Vosk 模型（按 README 自行放置）
 model/vosk-model-*/
@@ -61,4 +66,4 @@ config_kimi.txt
 
 # ============== 模型 ===================
 model
-deidao/yolov8n.pt
+deidao/model/yolov8n.pt

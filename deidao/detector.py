@@ -173,7 +173,7 @@ class DetectionThread(QThread):
             self.log_signal.emit(f" 异步处理告警异常: {e}")
 
     def run(self):
-        self.log_signal.emit("正在加载 YOLOv8 & MediaPipe 模型 (已启用轻量极速与异步告警模式)...")
+        self.log_signal.emit("正在加载 YOLOv8 & MediaPipe 模型 (已启用多特征融合跌倒检测 + 异步告警模式)...")
         try:
             try:
                 import torch
@@ -186,7 +186,7 @@ class DetectionThread(QThread):
             except ImportError:
                 self._device = "cpu"
                 self.log_signal.emit("️ 未安装 torch，YOLOv8 跌倒检测回退到 CPU")
-            model = YOLO('yolov8n.pt')
+            model = YOLO('model/yolov8n.pt')
             if self._device != "cpu":
                 model.to(self._device)
         except Exception as e:
@@ -227,8 +227,26 @@ class DetectionThread(QThread):
         mp_poz = mp.solutions.pose
         fall_threshold = self.settings.get("fall_threshold", 50)
 
+        # ========== 高优先级优化：多特征融合跌倒检测 ==========
+        # 优化1: 时间序列分析（滑动窗口 + 角速度）
+        ANGLE_WINDOW = 15              # 角度滑动窗口（帧数）
+        HEAD_WINDOW = int(min(fps * 1.5, 45))  # 头部高度窗口（约1.5秒）
+        FALL_CONSECUTIVE = 5           # 连续确认帧数（防止单帧误报）
+        ANGULAR_VEL_THRESHOLD = 2.0    # 角速度阈值（度/帧），跌倒>>2，弯腰<1
+        # 优化2: 头部高度变化检测
+        HEAD_DROP_THRESHOLD = 0.30     # 头部下降占身高比例阈值（每秒）
+        # 优化3: 宽高比变化检测（区分跌倒和主动躺下）
+        BBOX_RATIO_CHANGE_THRESHOLD = 1.5  # 宽高比变化倍数
+
+        angle_history = deque(maxlen=ANGLE_WINDOW)
+        head_y_history = deque(maxlen=max(HEAD_WINDOW, 5))
+        bbox_ratio_history = deque(maxlen=ANGLE_WINDOW)
+        fall_candidate_frames = 0
+        estimated_body_height_px = 200.0
+        # ========== 优化结束 ==========
+
         with mp_poz.Pose(
-            min_detection_confidence=0.5, min_tracking_confidence=0.5, model_complexity=0
+            min_detection_confidence=0.5, min_tracking_confidence=0.5, model_complexity=1
         ) as poz:
             while self.running and cap.isOpened():
                 ret, kare = cap.read()
@@ -242,6 +260,7 @@ class DetectionThread(QThread):
 
                 current_durus = "未检测到人员"
                 is_falling = False
+                person_detected_this_frame = False
 
                 sonuclar = model(kare, device=self._device, verbose=False)
                 for sonuc in sonuclar:
@@ -279,35 +298,110 @@ class DetectionThread(QThread):
                                 kalca_merkezi = ((kalcalar[0][0] + kalcalar[1][0]) / 2, (kalcalar[0][1] + kalcalar[1][1]) / 2)
 
                                 torso_aci = aci_hesapla(kalca_merkezi, omuz_merkezi)
-                                
-                                if torso_aci < 20:
-                                    current_durus = "站立 (Normal)"
-                                elif torso_aci > fall_threshold:
-                                    current_durus = "平躺 (Lying)"
-                                else:
-                                    current_durus = "跌倒中 (Falling)"
+                                person_detected_this_frame = True
 
-                                if current_durus == "跌倒中 (Falling)":
-                                    is_falling = True
-                                    dusme_sayaci += 1
-                                    dusme_sonrasi_kareler = 0
+                                # --- 获取头部（鼻子）在全帧的Y坐标 ---
+                                nose_y_full = y1 + isaretler[mp_poz.PoseLandmark.NOSE.value].y * h_box
 
-                                    current_time = time.time()
-                                    if 1 <= dusme_sayaci and (current_time - last_alarm_timestamp > cooldown_seconds):
-                                        if dusme_video_yazici is None and self.current_async_writer is None:
-                                            last_alarm_timestamp = current_time  
-                                            dusme_video_sayisi += 1
-                                            filename = f'dusme_{QDateTime.currentDateTime().toString("yyyyMMdd_hhmmss")}_{dusme_video_sayisi}.mp4'
-                                            
-                                            buffer_copy = deque(kare_tamponu)
-                                            alarm_thread = threading.Thread(
-                                                target=self.handle_alarm_async,
-                                                args=(filename, buffer_copy, fps, genislik, yukseklik)
-                                            )
-                                            alarm_thread.daemon = True
-                                            alarm_thread.start()
+                                # --- 关键点可见性检查（过滤遮挡/错误检测） ---
+                                key_lm_indices = [
+                                    mp_poz.PoseLandmark.NOSE.value,
+                                    mp_poz.PoseLandmark.LEFT_SHOULDER.value,
+                                    mp_poz.PoseLandmark.RIGHT_SHOULDER.value,
+                                    mp_poz.PoseLandmark.LEFT_HIP.value,
+                                    mp_poz.PoseLandmark.RIGHT_HIP.value,
+                                ]
+                                avg_visibility = sum(isaretler[lm].visibility for lm in key_lm_indices) / len(key_lm_indices)
+
+                                if avg_visibility < 0.4:
+                                    # 关键点不可靠，跳过本帧判定但不清空历史
+                                    pass
                                 else:
-                                    dusme_sayaci = 0
+                                    # ---- 更新历史记录 ----
+                                    angle_history.append(torso_aci)
+                                    head_y_history.append(nose_y_full)
+                                    bbox_h_px = max(y2 - y1, 1)
+                                    bbox_w_px = max(x2 - x1, 1)
+                                    bbox_ratio = bbox_w_px / bbox_h_px
+                                    bbox_ratio_history.append(bbox_ratio)
+
+                                    # 动态估计身高（像素），缓慢衰减但立即捕捉更大值
+                                    estimated_body_height_px = max(estimated_body_height_px * 0.995, float(bbox_h_px))
+
+                                    # ---- 优化1: 计算角速度（度/帧） ----
+                                    angular_velocity = 0.0
+                                    if len(angle_history) >= 3:
+                                        angular_velocity = abs(angle_history[-1] - angle_history[-3]) / 2.0
+
+                                    # ---- 优化2: 头部下降速率（像素/秒） ----
+                                    head_drop_per_sec = 0.0
+                                    if len(head_y_history) >= max(5, int(fps * 0.5)):
+                                        lookback = min(len(head_y_history), int(fps))
+                                        head_drop_rate_px = (head_y_history[-1] - head_y_history[-lookback]) / lookback
+                                        head_drop_per_sec = head_drop_rate_px * fps
+
+                                    # ---- 优化3: 宽高比变化倍数 ----
+                                    bbox_ratio_change = 1.0
+                                    if len(bbox_ratio_history) >= 5:
+                                        old_ratio = max(bbox_ratio_history[0], 0.01)
+                                        bbox_ratio_change = bbox_ratio_history[-1] / old_ratio
+
+                                    # ========== 多特征融合跌倒判定 ==========
+                                    is_fall_candidate = False
+
+                                    # 特征1: 躯干角度大 + 角速度高（快速倒下 vs 缓慢弯腰）
+                                    if torso_aci > 25 and angular_velocity > ANGULAR_VEL_THRESHOLD:
+                                        is_fall_candidate = True
+
+                                    # 特征2: 头部快速下降（>身高30%/秒）
+                                    if estimated_body_height_px > 50 and head_drop_per_sec > HEAD_DROP_THRESHOLD * estimated_body_height_px:
+                                        is_fall_candidate = True
+
+                                    # 特征3: 宽高比突变 + 角度异常（从站立变平躺）
+                                    if bbox_ratio_change > BBOX_RATIO_CHANGE_THRESHOLD and torso_aci > 25:
+                                        is_fall_candidate = True
+
+                                    # 连续帧确认（防止单帧误报）
+                                    if is_fall_candidate:
+                                        fall_candidate_frames += 1
+                                    else:
+                                        fall_candidate_frames = max(0, fall_candidate_frames - 1)
+
+                                    # ========== 状态判定 ==========
+                                    if fall_candidate_frames >= FALL_CONSECUTIVE:
+                                        current_durus = "跌倒中 (Falling!)"
+                                        is_falling = True
+                                        dusme_sonrasi_kareler = 0
+
+                                        current_time = time.time()
+                                        if current_time - last_alarm_timestamp > cooldown_seconds:
+                                            if dusme_video_yazici is None and self.current_async_writer is None:
+                                                last_alarm_timestamp = current_time
+                                                dusme_video_sayisi += 1
+                                                filename = f'dusme_{QDateTime.currentDateTime().toString("yyyyMMdd_hhmmss")}_{dusme_video_sayisi}.mp4'
+
+                                                buffer_copy = deque(kare_tamponu)
+                                                alarm_thread = threading.Thread(
+                                                    target=self.handle_alarm_async,
+                                                    args=(filename, buffer_copy, fps, genislik, yukseklik)
+                                                )
+                                                alarm_thread.daemon = True
+                                                alarm_thread.start()
+                                                self.log_signal.emit(
+                                                    f"[优化算法] 多特征确认跌倒! "
+                                                    f"角速度={angular_velocity:.1f}度/帧 "
+                                                    f"头降={head_drop_per_sec:.0f}px/s "
+                                                    f"宽高比x{bbox_ratio_change:.2f}"
+                                                )
+                                                fall_candidate_frames = 0
+                                    elif torso_aci < 20 and angular_velocity < 1.5:
+                                        current_durus = "站立 (Normal)"
+                                    elif torso_aci > fall_threshold and angular_velocity < 1.0:
+                                        current_durus = "平躺 (Lying)"
+                                    elif torso_aci > 20:
+                                        current_durus = "弯腰/活动中 (Active)"
+                                    else:
+                                        current_durus = "站立 (Normal)"
 
                                 if current_durus == "站立 (Normal)" and (dusme_video_yazici is not None or self.current_async_writer is not None):
                                     dusme_sonrasi_kareler += 1
@@ -319,6 +413,13 @@ class DetectionThread(QThread):
 
                             text_pos = (x1, max(y1 - 30, 10))
                             kare = cv2_add_chinese_text(kare, current_durus, text_pos, font_size=22, color=color)
+
+                # 无人检测到时清空历史，防止残留数据影响下一轮
+                if not person_detected_this_frame:
+                    angle_history.clear()
+                    head_y_history.clear()
+                    bbox_ratio_history.clear()
+                    fall_candidate_frames = 0
 
                 if self.current_async_writer is not None:
                     dusme_video_yazici = self.current_async_writer

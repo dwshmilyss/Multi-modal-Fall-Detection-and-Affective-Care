@@ -181,7 +181,7 @@ class MyCustomAdapter(DeviceAdapter):
 
 ### 注册到工厂函数
 
-在 `device_adapter.py` 的 `create_adapter` 函数中添加：
+在 `../deidao/device_adapter.py` 的 `create_adapter` 函数中添加：
 
 ```python
 elif mode == "my_custom":

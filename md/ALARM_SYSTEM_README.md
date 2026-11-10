@@ -8,7 +8,7 @@
 
 ### 1. AlarmManager - 告警管理器
 
-**位置**: `deidao/dialogs.py` (第 399-495 行)
+**位置**: `../deidao/dialogs.py` (第 399-495 行)
 
 **核心功能**:
 - ✅ 自动检测指标异常并记录告警
@@ -27,7 +27,7 @@
 
 ### 2. AlarmPopupDialog - 告警弹窗
 
-**位置**: `deidao/dialogs.py` (第 498-560 行)
+**位置**: `../deidao/dialogs.py` (第 498-560 行)
 
 **功能**:
 - 危险级别告警时自动弹出
@@ -84,7 +84,7 @@ def play_alarm(self):
 
 | 文件 | 修改内容 |
 |------|----------|
-| `deidao/dialogs.py` | 新增 AlarmManager、AlarmPopupDialog 类，修改 HealthDashboardDialog 集成告警系统 |
+| `../deidao/dialogs.py` | 新增 AlarmManager、AlarmPopupDialog 类，修改 HealthDashboardDialog 集成告警系统 |
 | `test_alarm_system.py` | 新增告警系统测试脚本 |
 | `ALARM_SYSTEM_README.md` | 本文档 |
 
@@ -169,7 +169,7 @@ python test_alarm_system.py
 
 ## 📝 注意事项
 
-1. 告警音文件路径：`deidao/alarm.mp3`
+1. 告警音文件路径：`../deidao/alarm.mp3`
 2. 告警记录仅保存在内存中，关闭程序后清空
 3. 冷却时间默认为 5 秒，可在 `AlarmManager.__init__` 中修改
 4. 最大告警记录数为 500 条，超出后自动删除最旧的记录

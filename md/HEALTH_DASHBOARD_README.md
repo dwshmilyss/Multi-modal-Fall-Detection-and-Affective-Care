@@ -36,7 +36,7 @@
 
 ## 📦 依赖说明
 
-已在 `requirements.txt` 中添加：
+已在 `../requirements.txt` 中添加：
 ```
 PyQt6-WebEngine>=6.6,<6.9  # 用于嵌入 ECharts Web 图表
 ```

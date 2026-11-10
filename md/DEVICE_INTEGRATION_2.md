@@ -9,7 +9,7 @@
 
 ## 配置切换
 
-编辑 `deidao/device_config.json` 文件，修改 `mode` 字段：
+编辑 `../deidao/device_config.json` 文件，修改 `mode` 字段：
 
 ```json
 {
