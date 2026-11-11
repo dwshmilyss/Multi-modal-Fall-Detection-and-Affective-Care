@@ -1,0 +1,23 @@
+# 面部情绪检测 - 配置文件
+# 用法: python app.py --config config.yaml
+
+# 模型设置
+model: best.onnx
+imgsz: 640          # 推理分辨率: 320/416/512/640
+conf: 0.5           # 置信度阈值: 0.1-0.95
+
+# 显示设置
+show_fps: true
+show_stats: true
+
+# 保存设置
+save_dir: output
+auto_log: true      # 是否自动记录 CSV 日志
+enable_record: true # 是否启用录像功能
+
+# 历史记录设置
+history_interval: 5 # 情绪历史记录间隔（秒）
+
+# 录像设置
+recording_codec: mp4v
+recording_fps: 30
