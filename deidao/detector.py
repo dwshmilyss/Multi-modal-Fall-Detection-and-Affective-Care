@@ -17,6 +17,21 @@ del _torch_lib
 
 os.environ['YOLO_AUTOINSTALL'] = '0'  # 防止 ultralytics 自动 pip install onnxruntime CPU 版
 
+# 确保 onnxruntime 能找到 cuDNN/cuBLAS DLL (情绪检测 ONNX 模型 GPU 加速必需)
+if sys.platform == "win32":
+    from pathlib import Path as _Path
+    _venv = _Path(sys.executable).parent.parent
+    _cuda_paths = [
+        str(_venv / "Lib" / "site-packages" / "nvidia" / "cudnn" / "bin"),
+        str(_venv / "Lib" / "site-packages" / "nvidia" / "cublas" / "bin"),
+        str(_venv / "Lib" / "site-packages" / "nvidia" / "cuda_nvrtc" / "bin"),
+    ]
+    _existing_path = os.environ.get("PATH", "")
+    _new_paths = [p for p in _cuda_paths if p not in _existing_path and os.path.isdir(p)]
+    if _new_paths:
+        os.environ["PATH"] = ";".join(_new_paths) + ";" + _existing_path
+    del _venv, _cuda_paths, _existing_path, _new_paths, _Path
+
 import math
 import time
 import json
