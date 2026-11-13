@@ -257,17 +257,21 @@ class DetectionThread(QThread):
         HEAD_DROP_THRESHOLD = 0.30     # 头部下降占身高比例阈值（每秒）
         # 优化3: 宽高比变化检测（区分跌倒和主动躺下）
         BBOX_RATIO_CHANGE_THRESHOLD = 1.5  # 宽高比变化倍数
-        # 优化4: 坐姿稳定检测（区分坐下和跌倒）
+        # 优化4: 髋部高度检测（区分坐下和跌倒的核心逻辑）
         SITTING_ANGLE_MIN = 25         # 坐姿角度下限
-        SITTING_ANGLE_MAX = 55         # 坐姿角度上限
-        SITTING_STABLE_FRAMES = int(fps * 2)  # 稳定2秒判定为坐姿
+        SITTING_ANGLE_MAX = 70         # 坐姿角度上限（扩大范围，兼容不同坐姿）
+        HIP_HEIGHT_SITTING_MIN = 0.35  # 坐姿髋部高度下限（占身高35%）
+        HIP_HEIGHT_SITTING_MAX = 0.55  # 坐姿髋部高度上限（占身高55%）
+        HIP_HEIGHT_FALLING = 0.25      # 跌倒时髋部高度（<25%身高）
 
         angle_history = deque(maxlen=ANGLE_WINDOW)
         head_y_history = deque(maxlen=max(HEAD_WINDOW, 5))
         bbox_ratio_history = deque(maxlen=ANGLE_WINDOW)
         fall_candidate_frames = 0
-        sitting_stable_frames = 0  # 坐姿稳定计数器
         estimated_body_height_px = 200.0
+        # 调试用：记录上一次的状态，只在变化时输出
+        prev_debug_durus = ""
+        prev_debug_fall_frames = -1
         # ========== 优化结束 ==========
 
         with mp_poz.Pose(
@@ -328,6 +332,11 @@ class DetectionThread(QThread):
                                 # --- 获取头部（鼻子）在全帧的Y坐标 ---
                                 nose_y_full = y1 + isaretler[mp_poz.PoseLandmark.NOSE.value].y * h_box
 
+                                # --- 获取髋部在全帧的Y坐标（用于区分坐下和跌倒） ---
+                                hip_y_full = y1 + kalca_merkezi[1]  # 髋部中心Y坐标
+                                # 髋部高度占身高的比例（0=头顶，1=脚底）
+                                hip_height_ratio = (y2 - hip_y_full) / max(estimated_body_height_px, 1)
+
                                 # --- 关键点可见性检查（过滤遮挡/错误检测） ---
                                 key_lm_indices = [
                                     mp_poz.PoseLandmark.NOSE.value,
@@ -371,33 +380,58 @@ class DetectionThread(QThread):
                                         old_ratio = max(bbox_ratio_history[0], 0.01)
                                         bbox_ratio_change = bbox_ratio_history[-1] / old_ratio
 
-                                    # ========== 多特征融合跌倒判定 ==========
+                                    # ========== 多特征融合跌倒判定（共识机制：至少2个特征同时触发） ==========
                                     is_fall_candidate = False
+                                    fall_reasons = []  # 记录触发跌倒的特征
+                                    triggered_features = []  # 记录触发了几个特征
 
-                                    # 特征1: 躯干角度大 + 角速度高（快速倒下 vs 缓慢弯腰）
-                                    # 阈值从25°提高到35°，减少坐下误报
-                                    if torso_aci > 35 and angular_velocity > ANGULAR_VEL_THRESHOLD:
+                                    # 优化4: 髋部高度检测（核心：区分坐下和跌倒）
+                                    # 坐下：髋部高度在身高35-55%位置（椅子高度），角度25-70°
+                                    if HIP_HEIGHT_SITTING_MIN <= hip_height_ratio <= HIP_HEIGHT_SITTING_MAX and SITTING_ANGLE_MIN <= torso_aci <= SITTING_ANGLE_MAX:
+                                        current_durus = "坐姿 (Sitting)"
+                                        fall_candidate_frames = 0
+                                        is_fall_candidate = False
+                                    # 跌倒：髋部很低（<25%身高）+ 角度大
+                                    elif hip_height_ratio < HIP_HEIGHT_FALLING and torso_aci > 35:
                                         is_fall_candidate = True
-
-                                    # 特征2: 头部快速下降（>身高30%/秒）
-                                    if estimated_body_height_px > 50 and head_drop_per_sec > HEAD_DROP_THRESHOLD * estimated_body_height_px:
-                                        is_fall_candidate = True
-
-                                    # 特征3: 宽高比突变 + 角度异常（从站立变平躺）
-                                    if bbox_ratio_change > BBOX_RATIO_CHANGE_THRESHOLD and torso_aci > 35:
-                                        is_fall_candidate = True
-
-                                    # 优化4: 坐姿稳定检测（角度在25-55°且稳定2秒 = 坐下，不是跌倒）
-                                    if SITTING_ANGLE_MIN < torso_aci < SITTING_ANGLE_MAX and angular_velocity < 0.5:
-                                        sitting_stable_frames += 1
-                                        if sitting_stable_frames >= SITTING_STABLE_FRAMES:
-                                            # 确认是坐姿，清空跌倒计数
-                                            current_durus = "坐姿 (Sitting)"
-                                            fall_candidate_frames = 0
-                                            sitting_stable_frames = 0
-                                            is_fall_candidate = False
+                                        fall_reasons.append(f"髋部过低({hip_height_ratio:.2f})")
+                                        triggered_features.append("hip_low")
                                     else:
-                                        sitting_stable_frames = max(0, sitting_stable_frames - 1)
+                                        # 特征1: 躯干角度大 + 角速度高（快速倒下 vs 缓慢弯腰）
+                                        if torso_aci > 35 and angular_velocity > ANGULAR_VEL_THRESHOLD:
+                                            fall_reasons.append(f"角度大({torso_aci:.0f}°)+角速度高({angular_velocity:.1f})")
+                                            triggered_features.append("angle_vel")
+
+                                        # 特征2: 头部快速下降（>身高30%/秒）
+                                        if estimated_body_height_px > 50 and head_drop_per_sec > HEAD_DROP_THRESHOLD * estimated_body_height_px:
+                                            fall_reasons.append(f"头降快({head_drop_per_sec:.0f}px/s)")
+                                            triggered_features.append("head_drop")
+
+                                        # 特征3: 宽高比突变 + 角度异常（从站立变平躺）
+                                        if bbox_ratio_change > BBOX_RATIO_CHANGE_THRESHOLD and torso_aci > 35:
+                                            fall_reasons.append(f"宽高比突变({bbox_ratio_change:.2f}x)")
+                                            triggered_features.append("bbox_change")
+
+                                        # 共识机制：至少2个特征同时触发才认为是跌倒（防止单特征误报）
+                                        if len(triggered_features) >= 2:
+                                            is_fall_candidate = True
+                                            fall_reasons.append(f"[{len(triggered_features)}个特征共识]")
+                                        elif len(triggered_features) == 1:
+                                            fall_reasons.append(f"[仅1个特征,不触发]")
+
+                                    # 调试日志：状态变化或候选帧变化时输出
+                                    if current_durus != prev_debug_durus or fall_candidate_frames != prev_debug_fall_frames or is_fall_candidate or fall_reasons:
+                                        debug_msg = (
+                                            f"[调试] 状态={current_durus} 角度={torso_aci:.0f}° 角速度={angular_velocity:.1f} "
+                                            f"髋部={hip_height_ratio:.2f} 头降={head_drop_per_sec:.0f}px/s "
+                                            f"宽高比={bbox_ratio_change:.2f}x "
+                                            f"候选帧={fall_candidate_frames} "
+                                            f"特征数={len(triggered_features)} "
+                                            f"触发={','.join(fall_reasons) if fall_reasons else '无'}"
+                                        )
+                                        print(debug_msg, flush=True)
+                                        prev_debug_durus = current_durus
+                                        prev_debug_fall_frames = fall_candidate_frames
 
                                     # 连续帧确认（防止单帧误报）
                                     if is_fall_candidate:
@@ -429,11 +463,16 @@ class DetectionThread(QThread):
                                                     f"[优化算法] 多特征确认跌倒! "
                                                     f"角速度={angular_velocity:.1f}度/帧 "
                                                     f"头降={head_drop_per_sec:.0f}px/s "
-                                                    f"宽高比x{bbox_ratio_change:.2f}"
+                                                    f"宽高比x{bbox_ratio_change:.2f} "
+                                                    f"髋部={hip_height_ratio:.2f} "
+                                                    f"特征数={len(triggered_features)}"
                                                 )
                                                 fall_candidate_frames = 0
                                     elif current_durus == "坐姿 (Sitting)":
-                                        pass  # 保持坐姿状态
+                                        pass  # 保持坐姿状态（已在优化4中设置）
+                                    elif HIP_HEIGHT_SITTING_MIN <= hip_height_ratio <= HIP_HEIGHT_SITTING_MAX:
+                                        # 髋部在椅子高度 = 坐姿（即使角度很小，端正坐着也是坐姿）
+                                        current_durus = "坐姿 (Sitting)"
                                     elif torso_aci < 20 and angular_velocity < 1.5:
                                         current_durus = "站立 (Normal)"
                                     elif torso_aci > fall_threshold and angular_velocity < 1.0:
@@ -460,7 +499,6 @@ class DetectionThread(QThread):
                     head_y_history.clear()
                     bbox_ratio_history.clear()
                     fall_candidate_frames = 0
-                    sitting_stable_frames = 0
 
                 if self.current_async_writer is not None:
                     dusme_video_yazici = self.current_async_writer

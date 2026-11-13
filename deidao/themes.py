@@ -349,6 +349,9 @@ THEME_REGISTRY = {
 
 def generate_global_stylesheet(t: dict) -> str:
     """根据主题字典生成全局 QSS 样式表"""
+    # 弹出层强制使用不透明背景（bg_main 永远是纯色），避免毛玻璃主题下重影
+    popup_bg = t['bg_main']
+    popup_sel = t['combo_selection_bg'] if not t['combo_selection_bg'].startswith('rgba') else t['bg_btn_hover'] if not t['bg_btn_hover'].startswith('rgba') else t['border']
     return f"""
 QMainWindow {{
     background-color: {t['bg_main']};
