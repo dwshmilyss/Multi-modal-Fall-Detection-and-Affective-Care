@@ -628,3 +628,101 @@ def apply_theme_to_dialog(dialog, theme: dict = None):
             apply_dwm_dark_mode(hwnd, is_dark)
         except Exception:
             pass
+
+
+# ==================== QMessageBox 主题适配 ====================
+
+def apply_theme_to_messagebox(msgbox, t: dict):
+    """为 QMessageBox 应用当前主题样式"""
+    msgbox.setStyleSheet(f"""
+        QMessageBox {{
+            background-color: {t['bg_main']};
+            color: {t['text_primary']};
+        }}
+        QMessageBox QLabel {{
+            color: {t['text_primary']};
+            font-size: 13px;
+            padding: 10px;
+        }}
+        QMessageBox QPushButton {{
+            background-color: {t['bg_btn']};
+            color: {t['text_primary']};
+            border: 1px solid {t['border_light']};
+            border-radius: 6px;
+            padding: 8px 20px;
+            font-size: 13px;
+            min-width: 80px;
+        }}
+        QMessageBox QPushButton:hover {{
+            background-color: {t['bg_btn_hover']};
+            border-color: {t['accent']};
+            color: {t['accent']};
+        }}
+        QMessageBox QPushButton:pressed {{
+            background-color: {t['bg_btn_pressed']};
+        }}
+    """)
+    # 应用 DWM 效果
+    if sys.platform == "win32":
+        try:
+            hwnd = int(msgbox.winId())
+            apply_dwm_glass(hwnd, t)
+            is_dark = t.get("bg_main", "#000000").startswith("#") and t["bg_main"] < "#808080"
+            apply_dwm_dark_mode(hwnd, is_dark)
+        except Exception:
+            pass
+
+
+def themed_info(parent, title: str, text: str):
+    """主题化的信息提示框"""
+    from PyQt6.QtWidgets import QMessageBox
+    t = get_current_theme()
+    msg = QMessageBox(parent)
+    msg.setIcon(QMessageBox.Icon.Information)
+    msg.setWindowTitle(title)
+    msg.setText(text)
+    msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+    apply_theme_to_messagebox(msg, t)
+    return msg.exec()
+
+
+def themed_warning(parent, title: str, text: str):
+    """主题化的警告提示框"""
+    from PyQt6.QtWidgets import QMessageBox
+    t = get_current_theme()
+    msg = QMessageBox(parent)
+    msg.setIcon(QMessageBox.Icon.Warning)
+    msg.setWindowTitle(title)
+    msg.setText(text)
+    msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+    apply_theme_to_messagebox(msg, t)
+    return msg.exec()
+
+
+def themed_critical(parent, title: str, text: str):
+    """主题化的错误提示框"""
+    from PyQt6.QtWidgets import QMessageBox
+    t = get_current_theme()
+    msg = QMessageBox(parent)
+    msg.setIcon(QMessageBox.Icon.Critical)
+    msg.setWindowTitle(title)
+    msg.setText(text)
+    msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+    apply_theme_to_messagebox(msg, t)
+    return msg.exec()
+
+
+def themed_question(parent, title: str, text: str, 
+                    buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    default=QMessageBox.StandardButton.No):
+    """主题化的询问提示框"""
+    from PyQt6.QtWidgets import QMessageBox
+    t = get_current_theme()
+    msg = QMessageBox(parent)
+    msg.setIcon(QMessageBox.Icon.Question)
+    msg.setWindowTitle(title)
+    msg.setText(text)
+    msg.setStandardButtons(buttons)
+    msg.setDefaultButton(default)
+    apply_theme_to_messagebox(msg, t)
+    return msg.exec()

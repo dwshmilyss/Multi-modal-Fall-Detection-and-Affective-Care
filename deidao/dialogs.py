@@ -77,7 +77,7 @@ except ImportError:
     HAS_WEBENGINE = False
 
 # 导入主题系统
-from themes import apply_theme_to_dialog, get_current_theme
+from themes import apply_theme_to_dialog, get_current_theme, themed_info, themed_warning, themed_critical, themed_question
 
 # 日志记录器
 logger = logging.getLogger(__name__)
@@ -146,9 +146,9 @@ class LoginDialog(QDialog):
                 self.logged_username = username
                 self.accept()
             else:
-                QMessageBox.warning(self, "登录失败", "用户名或密码错误，请检查 MySQL 中的凭证！")
+                themed_warning(self, "登录失败", "用户名或密码错误，请检查 MySQL 中的凭证！")
         except Exception as e:
-            QMessageBox.critical(self, "数据库错误", f"无法连接到 MySQL 数据库:\n{e}")
+            themed_critical(self, "数据库错误", f"无法连接到 MySQL 数据库:\n{e}")
 
 
 class SettingsDialog(QDialog):
@@ -277,7 +277,7 @@ class HistoryDialog(QDialog):
     def mark_as_resolved(self):
         current_item = self.file_list.currentItem()
         if not current_item:
-            QMessageBox.warning(self, "提示", "请先在左侧列表中选择一条告警记录！")
+            themed_warning(self, "提示", "请先在左侧列表中选择一条告警记录！")
             return
             
         file_path = current_item.data(Qt.ItemDataRole.UserRole)
@@ -296,10 +296,10 @@ class HistoryDialog(QDialog):
             cursor.close()
             db.close()
             
-            QMessageBox.information(self, "成功", "告警状态与家属处理意见已同步至数据库！")
+            themed_info(self, "成功", "告警状态与家属处理意见已同步至数据库！")
             self.load_logs_from_db() 
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"更新数据库失败: {e}")
+            themed_critical(self, "错误", f"更新数据库失败: {e}")
 
     def load_logs_from_db(self):
         self.file_list.clear()
@@ -342,7 +342,7 @@ class HistoryDialog(QDialog):
     def on_file_selected(self, item):
         file_path = item.data(Qt.ItemDataRole.UserRole)
         if not file_path or not os.path.exists(file_path):
-            QMessageBox.warning(self, "文件缺失", f"在本地磁盘中未找到该视频文件:\n{file_path}")
+            themed_warning(self, "文件缺失", f"在本地磁盘中未找到该视频文件:\n{file_path}")
             return
 
         if self.cap is not None:
@@ -694,7 +694,7 @@ class HealthTrendDialog(QDialog):
                 writer.writerow(['时间', self.metric_name])
                 for t, v in filtered:
                     writer.writerow([t.strftime("%Y-%m-%d %H:%M:%S"), round(v, 2)])
-            QMessageBox.information(self, "导出成功", f"数据已保存到:\n{file_name}")
+            themed_info(self, "导出成功", f"数据已保存到:\n{file_name}")
 
 
 # ==================== 健康指标大屏 ====================
@@ -1036,7 +1036,7 @@ class HealthDashboardDialog(QDialog):
     def refresh_data(self):
         """手动刷新"""
         self.update_data()
-        QMessageBox.information(self, "刷新成功", "体征数据已更新！")
+        themed_info(self, "刷新成功", "体征数据已更新！")
     
     def show_trend(self, metric_key):
         """显示趋势图"""
@@ -1064,7 +1064,7 @@ class HealthDashboardDialog(QDialog):
                 for row in self.simulator.history[-100:]:
                     t, hr, spo2, bp_s, bp_d, steps, temp, batt = row
                     writer.writerow([t.strftime("%Y-%m-%d %H:%M:%S"), f"{hr:.0f}", f"{spo2:.1f}", f"{bp_s:.0f}", f"{bp_d:.0f}", f"{steps:.0f}", f"{temp:.1f}", f"{batt:.1f}"])
-            QMessageBox.information(self, "导出成功", f"健康报告已保存到:\n{file_name}")
+            themed_info(self, "导出成功", f"健康报告已保存到:\n{file_name}")
     
     def play_alarm(self):
         """播放告警音（异常数据时，受静音控制）"""
@@ -1131,7 +1131,7 @@ class HealthDashboardDialog(QDialog):
     
     def clear_alarms(self):
         """清空告警记录"""
-        reply = QMessageBox.question(
+        reply = themed_question(
             self, "确认清空", "确定要清空所有告警记录吗？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
@@ -1140,7 +1140,7 @@ class HealthDashboardDialog(QDialog):
             self.alarm_manager.clear_alarms()
             self.alarm_list.setPlainText("暂无告警记录...")
             self.update_alarm_stats_display()
-            QMessageBox.information(self, "已清空", "告警记录已清空！")
+            themed_info(self, "已清空", "告警记录已清空！")
     
     def show_alarm_stats(self):
         """显示告警统计详情"""
@@ -1165,7 +1165,7 @@ class HealthDashboardDialog(QDialog):
         else:
             msg += "\n最后告警：无"
         
-        QMessageBox.information(self, "告警统计", msg)
+        themed_info(self, "告警统计", msg)
     
     def eventFilter(self, obj, event):
         """事件过滤器：处理卡片点击"""
@@ -1535,7 +1535,7 @@ class EmotionDetectionDialog(QDialog):
 
     def start_detection(self):
         if not self.model_path or not os.path.exists(self.model_path):
-            QMessageBox.warning(self, "模型未选择", "请先点击「选择模型」加载 best.onnx 模型文件。")
+            themed_warning(self, "模型未选择", "请先点击「选择模型」加载 best.onnx 模型文件。")
             return
         if self.thread is not None and self.thread.isRunning():
             return
@@ -1686,12 +1686,12 @@ class EmotionDetectionDialog(QDialog):
         if self._pipeline_active:
             return
         if self.thread is None or not self.thread.isRunning():
-            QMessageBox.information(self, "无法诊断", "请先启动情绪检测。")
+            themed_info(self, "无法诊断", "请先启动情绪检测。")
             return
         emotion = self._current_emotion
         confidence = self._current_conf
         if not emotion or emotion == "--" or confidence <= 0:
-            QMessageBox.information(self, "暂无表情", "当前画面还没有有效的表情识别结果，请稍后再试。")
+            themed_info(self, "暂无表情", "当前画面还没有有效的表情识别结果，请稍后再试。")
             return
 
         self._diagnosis_id += 1
@@ -2677,7 +2677,7 @@ class AISmartDialog(QDialog):
                 AISmartDialog._ensure_config()
                 self._update_tip_text()
             except Exception as e:
-                QMessageBox.warning(self, "保存失败", f"写入配置文件失败：{e}")
+                themed_warning(self, "保存失败", f"写入配置文件失败：{e}")
             dlg.accept()
 
         btn_ok.clicked.connect(save_and_close)
@@ -2785,7 +2785,7 @@ class AISmartDialog(QDialog):
             pass
         if "未能识别" not in msg and "已停止" not in msg:
             try:
-                QMessageBox.warning(self, "语音识别提示", msg)
+                themed_warning(self, "语音识别提示", msg)
             except Exception:
                 pass
 

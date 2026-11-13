@@ -38,6 +38,7 @@ from database import init_database
 from dialogs import LoginDialog, SettingsDialog, HistoryDialog, HealthDashboardDialog, EmotionDetectionDialog, AISmartDialog
 from detector import DetectionThread
 from ui_layout import Ui_MainWindow
+from themes import get_current_theme, themed_info, themed_warning, themed_critical, themed_question
 from themes import THEME_REGISTRY, generate_global_stylesheet, save_theme, load_theme, apply_dwm_glass, apply_dwm_dark_mode
 
 
@@ -154,7 +155,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def switch_account(self):
         if self.thread is not None and self.thread.isRunning():
-            reply = QMessageBox.question(
+            reply = themed_question(
                 self, "正在监测中", 
                 "当前正在进行实时视频监测，切换身份将停止监测。是否继续？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
@@ -336,7 +337,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def call_feishu_phone(self):
         """通过飞书官方链接或API发起音视频电话连线"""
         feishu_meeting_url = "https://www.feishu.cn/" 
-        reply = QMessageBox.question(
+        reply = themed_question(
             self, "飞书音视频通话",
             "即将通过飞书官方开放接口向老人端智能终端发起音视频电话连线。\n是否立即调起飞书客户端/网页端？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
@@ -416,9 +417,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 cap.release()
                 self.video_source = file_name
                 self.add_log(f"已选择本地测试视频: {file_name.split('/')[-1]}")
-                QMessageBox.information(self, "导入成功", f"视频文件已成功导入！\n\n{file_name.split('/')[-1]}")
+                themed_info(self, "导入成功", f"视频文件已成功导入！\n\n{file_name.split('/')[-1]}")
             else:
-                QMessageBox.critical(self, "导入失败", "无法读取该视频文件，请确认文件格式是否正确或文件是否损坏。")
+                themed_critical(self, "导入失败", "无法读取该视频文件，请确认文件格式是否正确或文件是否损坏。")
 
     def open_history_dialog(self):
         dialog = HistoryDialog(self)
@@ -426,14 +427,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def open_settings_dialog(self):
         if self.user_role != "admin":
-            QMessageBox.warning(self, "权限拒绝", "您当前是以普通家属身份登录，无法修改系统参数！")
+            themed_warning(self, "权限拒绝", "您当前是以普通家属身份登录，无法修改系统参数！")
             return
 
         dialog = SettingsDialog(self.current_settings, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.current_settings = dialog.settings
             self.add_log("系统设置已更新: 飞书Webhook已强制绑定")
-            QMessageBox.information(self, "设置成功", "高级参数已成功更新！若正在监测，请重新点击“开始监测”生效。")
+            themed_info(self, "设置成功", "高级参数已成功更新！若正在监测，请重新点击“开始监测”生效。")
 
     def start_detection(self):
         if self.thread is not None and self.thread.isRunning():
