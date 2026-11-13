@@ -252,7 +252,7 @@ class DetectionThread(QThread):
         ANGLE_WINDOW = 15              # 角度滑动窗口（帧数）
         HEAD_WINDOW = int(min(fps * 1.5, 45))  # 头部高度窗口（约1.5秒）
         FALL_CONSECUTIVE = 5           # 连续确认帧数（防止单帧误报）
-        ANGULAR_VEL_THRESHOLD = 2.0    # 角速度阈值（度/帧），跌倒>>2，弯腰<1
+        ANGULAR_VEL_THRESHOLD = 3.0    # 角速度阈值（度/帧），跌倒>>3，弯腰<1（方案B：从2.0提高到3.0，减少弯腰误报）
         # 优化2: 头部高度变化检测
         HEAD_DROP_THRESHOLD = 0.30     # 头部下降占身高比例阈值（每秒）
         # 优化3: 宽高比变化检测（区分跌倒和主动躺下）
@@ -263,10 +263,13 @@ class DetectionThread(QThread):
         HIP_HEIGHT_SITTING_MIN = 0.35  # 坐姿髋部高度下限（占身高35%）
         HIP_HEIGHT_SITTING_MAX = 0.55  # 坐姿髋部高度上限（占身高55%）
         HIP_HEIGHT_FALLING = 0.25      # 跌倒时髋部高度（<25%身高）
+        SITTING_BBOX_RATIO_MIN = 0.7   # 坐姿宽高比下限（坐着时人矮胖，宽高比大，提高到0.7避免误判站立为坐姿）
+        SITTING_ANGULAR_VEL_MAX = 0.5  # 坐姿角速度上限（坐着时稳定，角速度低）
 
         angle_history = deque(maxlen=ANGLE_WINDOW)
         head_y_history = deque(maxlen=max(HEAD_WINDOW, 5))
         bbox_ratio_history = deque(maxlen=ANGLE_WINDOW)
+        hip_y_history = deque(maxlen=ANGLE_WINDOW)  # 方案C: 髋部Y坐标历史（用于检测髋部下降）
         fall_candidate_frames = 0
         estimated_body_height_px = 200.0
         # 调试用：记录上一次的状态，只在变化时输出
@@ -354,6 +357,7 @@ class DetectionThread(QThread):
                                     # ---- 更新历史记录 ----
                                     angle_history.append(torso_aci)
                                     head_y_history.append(nose_y_full)
+                                    hip_y_history.append(hip_y_full)  # 方案C: 记录髋部Y坐标
                                     bbox_h_px = max(y2 - y1, 1)
                                     bbox_w_px = max(x2 - x1, 1)
                                     bbox_ratio = bbox_w_px / bbox_h_px
@@ -374,6 +378,13 @@ class DetectionThread(QThread):
                                         head_drop_rate_px = (head_y_history[-1] - head_y_history[-lookback]) / lookback
                                         head_drop_per_sec = head_drop_rate_px * fps
 
+                                    # ---- 方案C: 髋部下降速率（像素/秒） ----
+                                    HIP_DROP_THRESHOLD = 100  # 髋部下降速率阈值（像素/秒），弯腰时髋部稳定，跌倒时髋部快速下降
+                                    hip_drop_per_sec = 0.0
+                                    if len(hip_y_history) >= 5:
+                                        hip_drop_rate_px = (hip_y_history[-1] - hip_y_history[-5]) / 5
+                                        hip_drop_per_sec = hip_drop_rate_px * fps
+
                                     # ---- 优化3: 宽高比变化倍数 ----
                                     bbox_ratio_change = 1.0
                                     if len(bbox_ratio_history) >= 5:
@@ -387,7 +398,9 @@ class DetectionThread(QThread):
 
                                     # 优化4: 髋部高度检测（核心：区分坐下和跌倒）
                                     # 坐下：髋部高度在身高35-55%位置（椅子高度），角度25-70°
-                                    if HIP_HEIGHT_SITTING_MIN <= hip_height_ratio <= HIP_HEIGHT_SITTING_MAX and SITTING_ANGLE_MIN <= torso_aci <= SITTING_ANGLE_MAX:
+                                    # 或者：宽高比大（≥0.7）+ 角度小（<25°）+ 角速度低（<0.5）= 端正坐着且稳定
+                                    if (HIP_HEIGHT_SITTING_MIN <= hip_height_ratio <= HIP_HEIGHT_SITTING_MAX and SITTING_ANGLE_MIN <= torso_aci <= SITTING_ANGLE_MAX) or \
+                                       (bbox_ratio >= SITTING_BBOX_RATIO_MIN and torso_aci < 25 and angular_velocity < SITTING_ANGULAR_VEL_MAX):
                                         current_durus = "坐姿 (Sitting)"
                                         fall_candidate_frames = 0
                                         is_fall_candidate = False
@@ -397,15 +410,15 @@ class DetectionThread(QThread):
                                         fall_reasons.append(f"髋部过低({hip_height_ratio:.2f})")
                                         triggered_features.append("hip_low")
                                     else:
-                                        # 特征1: 躯干角度大 + 角速度高（快速倒下 vs 缓慢弯腰）
-                                        if torso_aci > 35 and angular_velocity > ANGULAR_VEL_THRESHOLD:
-                                            fall_reasons.append(f"角度大({torso_aci:.0f}°)+角速度高({angular_velocity:.1f})")
-                                            triggered_features.append("angle_vel")
+                                        # 特征1: 躯干角度大 + 角速度高 + 髋部快速下降（方案C: 弯腰时髋部稳定，跌倒时髋部快速下降）
+                                        if torso_aci > 35 and angular_velocity > ANGULAR_VEL_THRESHOLD and hip_drop_per_sec > HIP_DROP_THRESHOLD:
+                                            fall_reasons.append(f"角度大({torso_aci:.0f}°)+角速度高({angular_velocity:.1f})+髋部降({hip_drop_per_sec:.0f}px/s)")
+                                            triggered_features.append("angle_vel_hip")
 
-                                        # 特征2: 头部快速下降（>身高30%/秒）
-                                        if estimated_body_height_px > 50 and head_drop_per_sec > HEAD_DROP_THRESHOLD * estimated_body_height_px:
-                                            fall_reasons.append(f"头降快({head_drop_per_sec:.0f}px/s)")
-                                            triggered_features.append("head_drop")
+                                        # 特征2: 头部快速下降 + 髋部快速下降（方案C: 弯腰时髋部稳定，跌倒时髋部快速下降）
+                                        if estimated_body_height_px > 50 and head_drop_per_sec > HEAD_DROP_THRESHOLD * estimated_body_height_px and hip_drop_per_sec > HIP_DROP_THRESHOLD:
+                                            fall_reasons.append(f"头降快({head_drop_per_sec:.0f}px/s)+髋部降({hip_drop_per_sec:.0f}px/s)")
+                                            triggered_features.append("head_hip_drop")
 
                                         # 特征3: 宽高比突变 + 角度异常（从站立变平躺）
                                         if bbox_ratio_change > BBOX_RATIO_CHANGE_THRESHOLD and torso_aci > 35:
@@ -423,8 +436,9 @@ class DetectionThread(QThread):
                                     if current_durus != prev_debug_durus or fall_candidate_frames != prev_debug_fall_frames or is_fall_candidate or fall_reasons:
                                         debug_msg = (
                                             f"[调试] 状态={current_durus} 角度={torso_aci:.0f}° 角速度={angular_velocity:.1f} "
-                                            f"髋部={hip_height_ratio:.2f} 头降={head_drop_per_sec:.0f}px/s "
-                                            f"宽高比={bbox_ratio_change:.2f}x "
+                                            f"髋部={hip_height_ratio:.2f} 髋部降={hip_drop_per_sec:.0f}px/s "
+                                            f"头降={head_drop_per_sec:.0f}px/s "
+                                            f"宽高比={bbox_ratio:.2f}({bbox_ratio_change:.2f}x) "
                                             f"候选帧={fall_candidate_frames} "
                                             f"特征数={len(triggered_features)} "
                                             f"触发={','.join(fall_reasons) if fall_reasons else '无'}"
@@ -438,6 +452,11 @@ class DetectionThread(QThread):
                                         fall_candidate_frames += 1
                                     else:
                                         fall_candidate_frames = max(0, fall_candidate_frames - 1)
+
+                                    # 方案A: 恢复检测 - 如果角度恢复到<25°，说明是弯腰后恢复，清除候选帧
+                                    if torso_aci < 25 and fall_candidate_frames > 0:
+                                        fall_candidate_frames = 0
+                                        print("[调试] 检测到恢复动作（角度<25°），清除候选帧", flush=True)
 
                                     # ========== 状态判定 ==========
                                     if fall_candidate_frames >= FALL_CONSECUTIVE:
@@ -472,6 +491,9 @@ class DetectionThread(QThread):
                                         pass  # 保持坐姿状态（已在优化4中设置）
                                     elif HIP_HEIGHT_SITTING_MIN <= hip_height_ratio <= HIP_HEIGHT_SITTING_MAX:
                                         # 髋部在椅子高度 = 坐姿（即使角度很小，端正坐着也是坐姿）
+                                        current_durus = "坐姿 (Sitting)"
+                                    elif bbox_ratio >= SITTING_BBOX_RATIO_MIN and torso_aci < 25 and angular_velocity < SITTING_ANGULAR_VEL_MAX:
+                                        # 宽高比大 + 角度小 + 角速度低 = 坐姿（人矮胖，坐得很端正且稳定）
                                         current_durus = "坐姿 (Sitting)"
                                     elif torso_aci < 20 and angular_velocity < 1.5:
                                         current_durus = "站立 (Normal)"

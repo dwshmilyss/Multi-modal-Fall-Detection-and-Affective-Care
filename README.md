@@ -18,13 +18,17 @@
 | --- | --- |
 | YOLOv8 实时人员检测 | COCO `person` 类，画定位框 |
 | MediaPipe Pose 关键点 | 双肩、双髋中点计算**躯干倾角** |
-| 三段式姿态识别 | 站立 `< 35°` / 跌倒中 35°~70° / 平躺 `> 70°`（阈值可在设置中调） |
+| **多特征融合跌倒检测** | 角速度 + 头降 + 宽高比 + 髋部下降 + 髋部高度，至少 2 个特征共识才报警 |
+| **坐姿检测** | 髋部高度 + 宽高比 + 角速度，区分坐下和跌倒 |
+| **弯腰误报抑制** | 恢复检测 + 角速度阈值 + 髋部下降速率，防止弯腰误报 |
 | 前置缓冲区录像 | 跌倒告警自动拼接 N 秒前置视频，存盘至 `result/` |
 | MySQL 历史回放 | `alarm_logs` 表可追溯，含家属处理意见 |
 | 飞书机器人推送 | 交互卡片实时同步给值班家属 |
 | 双角色系统 | 管理员运维端（`root`）/ 家属亲情看护端（`family`） |
 | 健康指标大屏 | 心率/血氧/血压/步数/体温/电量（演示数据，可对接硬件） |
 | 中文字体自适应 | `msyh.ttc` / `simhei.ttf` 自动回退 |
+
+> 📄 详细算法优化文档见 [md/FALL_DETECTION_OPTIMIZATION.md](md/FALL_DETECTION_OPTIMIZATION.md)
 
 ### 💬 语音 & AI（`deidao/dialogs.py`）
 | 能力 | 说明 |
@@ -51,11 +55,18 @@ AI-Vision-Guardian/
 │   ├── main.py                   # PyQt6 主程序入口
 │   ├── ui_layout.py              # One Dark 风格主界面
 │   ├── dialogs.py                # 6 类弹窗 + TTS / 语音 / AI 多线程
-│   ├── detector.py               # YOLOv8+MediaPipe 检测线程
+│   ├── detector.py               # YOLOv8+MediaPipe 检测线程（多特征融合算法）
 │   └── database.py               # MySQL 初始化
 ├── qingxu/                       # 情绪识别子模块
 │   ├── app.py                    # YOLOv11 face emotion 单机 demo
 │   └── best.onnx                 # 训练好的情绪识别权重（需自行放置）
+├── md/                           # 项目文档
+│   ├── FALL_DETECTION_OPTIMIZATION.md  # 跌倒检测算法优化文档
+│   ├── ALARM_SYSTEM_README.md    # 告警系统说明
+│   ├── DEVICE_INTEGRATION_1.md   # 设备集成指南 1
+│   ├── DEVICE_INTEGRATION_2.md   # 设备集成指南 2
+│   ├── HEALTH_DASHBOARD_README.md # 健康大屏说明
+│   └── HUAWEI_BAND_GUIDE.md      # 华为手环对接指南
 ├── model/
 │   └── vosk-model-small-cn-0.22/ # Vosk 中文模型（首次使用需下载，见下文）
 ├── tests/                        # 烟雾测试 & 工具
@@ -260,6 +271,9 @@ python tests/stop_all_tts.py
 
 ## 🧭 后续可扩展方向
 
+- **加权打分机制**：给不同特征分配权重，总分超过阈值才报警（当前使用共识机制）
+- **机器学习分类器**：收集大量数据训练 SVM/Random Forest，替代手工规则
+- **时序模型**：使用 LSTM/GRU 学习动作时间模式，更准确区分跌倒和日常活动
 - **硬件联动**：通过 MQTT / TCP 接入智能手环、毫米波雷达
 - **多摄像头 / 多人**：将检测逻辑并发化，扩展至 N 路视频
 - **云端数据库**：MySQL → 阿里云 / 腾讯云 RDS，支持跨地域家属查看
