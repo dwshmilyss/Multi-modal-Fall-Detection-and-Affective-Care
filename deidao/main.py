@@ -38,6 +38,7 @@ from database import init_database
 from dialogs import LoginDialog, SettingsDialog, HistoryDialog, HealthDashboardDialog, EmotionDetectionDialog, AISmartDialog
 from detector import DetectionThread
 from ui_layout import Ui_MainWindow
+from themes import THEME_REGISTRY, generate_global_stylesheet, save_theme, load_theme, apply_dwm_glass, apply_dwm_dark_mode
 
 
 # ==================== 摄像头枚举 ====================
@@ -92,95 +93,9 @@ try:
 except Exception as e:
     print(f"音频模块初始化失败: {e}")
 
-# ==================== 全局主题样式表 ====================
-STYLE_SHEET = """
-QMainWindow, QDialog {
-    background-color: #0F172A;
-}
-
-QWidget {
-    color: #F8FAFC;
-    font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
-}
-
-QPushButton {
-    background-color: #334155;
-    border: 1px solid #475569;
-    border-radius: 6px;
-    color: #FFFFFF;
-    font-size: 13px;
-    font-weight: 600;
-    padding: 8px 14px;
-}
-QPushButton:hover {
-    background-color: #475569;
-    border-color: #64748B;
-}
-QPushButton:pressed {
-    background-color: #1E293B;
-}
-QPushButton:disabled {
-    background-color: #1E293B;
-    border-color: #334155;
-    color: #64748B;
-}
-
-QComboBox, QLineEdit {
-    background-color: #334155;
-    border: 1px solid #475569;
-    border-radius: 6px;
-    color: #FFFFFF;
-    font-size: 13px;
-    padding: 6px 10px;
-}
-QComboBox:hover, QLineEdit:hover {
-    border-color: #64748B;
-}
-QComboBox::drop-down {
-    subcontrol-origin: padding;
-    subcontrol-position: top right;
-    width: 25px;
-    border-left-width: 1px;
-    border-left-color: #475569;
-    border-left-style: solid;
-}
-QComboBox QAbstractItemView {
-    background-color: #1E293B;
-    color: #F8FAFC;
-    selection-background-color: #334155;
-    border: 1px solid #475569;
-}
-
-QListWidget {
-    background-color: #0F172A;
-    border: 1px solid #334155;
-    border-radius: 6px;
-    color: #CBD5E1;
-    font-size: 13px;
-    padding: 5px;
-}
-QListWidget::item {
-    padding: 6px;
-    border-bottom: 1px solid #1E293B;
-}
-
-QSlider::groove:horizontal {
-    border: 1px solid #475569;
-    height: 6px;
-    background: #1E293B;
-    border-radius: 3px;
-}
-QSlider::handle:horizontal {
-    background: #38BDF8;
-    border: 1px solid #0284C7;
-    width: 16px;
-    margin: -5px 0;
-    border-radius: 8px;
-}
-QSlider::handle:horizontal:hover {
-    background: #7DD3FC;
-}
-"""
+# ==================== 全局主题样式表（由 themes.py 动态生成） ====================
+_default_theme_key = load_theme("one_dark")
+STYLE_SHEET = generate_global_stylesheet(THEME_REGISTRY[_default_theme_key])
 
 # ==================== PyQt6 主界面 ====================
 
@@ -194,7 +109,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             "fall_threshold": 50,
             "sound_enabled": True,
             "buffer_seconds": 10,
-            "feishu_webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/e1d06cee-2c38-4679-962a-9fccb85fd766"
+            "feishu_webhook": os.environ.get("FEISHU_WEBHOOK", "")
         }
         
         # 加载纯代码布局
@@ -207,6 +122,17 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.video_source = 0  
 
         self.setup_camera_combobox()
+
+        # 绑定主题切换信号
+        self.theme_combo.currentIndexChanged.connect(self.on_theme_changed)
+        # 将下拉框设为当前已保存的主题
+        saved_key = load_theme("one_dark")
+        idx = self.theme_combo.findData(saved_key)
+        if idx >= 0:
+            self.theme_combo.setCurrentIndex(idx)
+
+        # 应用初始 DWM 效果
+        self._apply_dwm_effect()
 
         # 绑定核心按钮信号与槽
         self.btn_file.clicked.connect(self.select_video_file)
@@ -250,6 +176,31 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         else:
             self.show()
 
+    def on_theme_changed(self, index):
+        """主题下拉框切换回调"""
+        theme_key = self.theme_combo.currentData()
+        if theme_key and theme_key != self.current_theme_name:
+            self.apply_theme(theme_key)
+            save_theme(theme_key)
+            # 应用 Windows DWM 真毛玻璃效果
+            self._apply_dwm_effect()
+
+    def _apply_dwm_effect(self):
+        """应用 DWM 毛玻璃效果到主窗口"""
+        if sys.platform != "win32":
+            return
+        try:
+            # 获取窗口句柄
+            hwnd = int(self.winId())
+            # 应用毛玻璃效果
+            apply_dwm_glass(hwnd, self.current_theme)
+            # 应用深色模式到标题栏
+            is_dark = self.current_theme.get("bg_main", "").startswith("#") and \
+                      self.current_theme["bg_main"] < "#808080"
+            apply_dwm_dark_mode(hwnd, is_dark)
+        except Exception as e:
+            print(f"DWM 效果应用失败: {e}")
+
     def apply_role_permissions(self):
         """家属端与管理员端的功能与交互丰富化重构"""
         if self.user_role == "family":
@@ -272,19 +223,20 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 index = parent_layout.indexOf(self.btn_history)
                 
                 # 统一的侧边栏菜单按钮样式表（与“历史片段”等保持完全一致）
-                menu_btn_style = """
-                    QPushButton {
+                t = self.current_theme
+                menu_btn_style = f"""
+                    QPushButton {{
                         background-color: transparent;
                         border: none;
-                        color: #CBD5E1;
+                        color: {t['text_primary']};
                         text-align: left;
                         font-size: 13px;
                         font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
                         padding: 5px 0px;
-                    }
-                    QPushButton:hover {
-                        color: #38BDF8;
-                    }
+                    }}
+                    QPushButton:hover {{
+                        color: {t['accent']};
+                    }}
                 """
 
                 # 飞书音视频通话按钮
@@ -315,14 +267,17 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.title_label.setText("管理运维平台 - 智能人员跌倒实时监测系统")
             self.add_log("系统以【管理员】身份运行，已开放所有高级运维与参数配置权限。")
 
-    def _add_sidebar_menu_btn(self, parent_layout, after_widget, text, slot, accent_color="#38BDF8"):
+    def _add_sidebar_menu_btn(self, parent_layout, after_widget, text, slot, accent_color=None):
         """家属端统一追加一个侧边栏菜单按钮。"""
+        t = self.current_theme
+        if accent_color is None:
+            accent_color = t['accent']
         btn = QPushButton(text, self.centralwidget)
         btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: transparent;
                 border: none;
-                color: #CBD5E1;
+                color: {t['text_primary']};
                 text-align: left;
                 font-size: 13px;
                 font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
@@ -405,6 +360,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         self.camera_combo = QComboBox()
         self.camera_combo.setMinimumWidth(220)
+        self.camera_combo.setStyleSheet(
+            "QComboBox { background-color: #1E293B; border: 1px solid #475569; border-radius: 6px; "
+            "color: #F8FAFC; padding: 6px 10px; font-size: 13px; }"
+            "QComboBox::drop-down { border: none; width: 28px; }"
+            "QComboBox::down-arrow { image: none; border-left: 5px solid transparent; border-right: 5px solid transparent; "
+            "border-top: 6px solid #94A3B8; margin-right: 6px; }"
+            "QComboBox QAbstractItemView { background-color: #1E293B; color: #F8FAFC; selection-background-color: #38BDF8; }"
+        )
         cams = enumerate_cameras(max_index=6)
 
         if not cams:
@@ -488,7 +451,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.btn_file.setEnabled(False)
 
         self.lbl_live_badge.setText("LIVE 实时监测中")
-        self.lbl_live_badge.setStyleSheet("color: #10B981; font-weight: bold; font-size: 13px; border: none;")
+        t = self.current_theme
+        self.lbl_live_badge.setStyleSheet(f"color: {t['success']}; font-weight: bold; font-size: 13px; border: none;")
 
     def stop_detection(self):
         if self.thread is not None:
@@ -503,11 +467,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         self.video_label.setText("检测已停止")
         self.lbl_live_badge.setText("已停止")
-        self.lbl_live_badge.setStyleSheet("color: #64748B; font-weight: bold; font-size: 13px; border: none;")
+        t = self.current_theme
+        self.lbl_live_badge.setStyleSheet(f"color: {t['text_secondary']}; font-weight: bold; font-size: 13px; border: none;")
 
         self.lbl_alarm_status.setText("系统待命")
-        self.alarm_card.setStyleSheet("background-color: #0F172A; border: 1px solid #1E293B; border-radius: 8px;")
-        self.lbl_alarm_status.setStyleSheet("color: #38BDF8; border: none;")
+        self.alarm_card.setStyleSheet(f"background-color: {t['bg_alarm']}; border: 1px solid {t['border']}; border-radius: 8px;")
+        self.lbl_alarm_status.setStyleSheet(f"color: {t['text_title']}; border: none;")
         self.add_log("监测线程已被停止。")
 
     def update_image(self, cv_img, durus, fall_count, is_falling):
@@ -531,8 +496,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.alarm_card.setStyleSheet("background-color: #DC2626; border-radius: 8px;")
         else:
             self.lbl_alarm_status.setText("画面监测正常")
-            self.lbl_alarm_status.setStyleSheet("color: #10B981; border: none;")
-            self.alarm_card.setStyleSheet("background-color: #022C22; border: 1px solid #065F46; border-radius: 8px;")
+            t = self.current_theme
+            self.lbl_alarm_status.setStyleSheet(f"color: {t['success']}; border: none;")
+            self.alarm_card.setStyleSheet(f"background-color: {t['bg_alarm']}; border: 1px solid {t['border']}; border-radius: 8px;")
 
     def closeEvent(self, event):
         self.stop_detection()

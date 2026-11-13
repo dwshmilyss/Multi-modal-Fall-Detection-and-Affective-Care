@@ -79,9 +79,11 @@ class DetectionThread(QThread):
         super().__init__()
         self.source = source
         self._device = "cpu"
-        default_webhook = "绑定你自己的,我的飞书要炸了"
+        default_webhook = os.environ.get("FEISHU_WEBHOOK", "")
         self.settings = settings if settings else {"fall_threshold": 50, "sound_enabled": True, "buffer_seconds": 10, "feishu_webhook": default_webhook}
-        self.settings["feishu_webhook"] = default_webhook
+        if not self.settings.get("feishu_webhook"):
+            if not self.settings.get("feishu_webhook"):
+                self.settings["feishu_webhook"] = default_webhook
 
         self.running = True
 
@@ -107,7 +109,10 @@ class DetectionThread(QThread):
             print(f"播放警报音频异常: {e}")
 
     def send_feishu_notification(self, video_filename):
-        webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/e1d06cee-2c38-4679-962a-9fccb85fd766"
+        webhook_url = self.settings.get("feishu_webhook", "") or os.environ.get("FEISHU_WEBHOOK", "")
+        if not webhook_url:
+            self.log_signal.emit("飞书 Webhook 未配置，跳过推送（请在 .env 中设置 FEISHU_WEBHOOK）")
+            return
         time_str = QDateTime.currentDateTime().toString("yyyy-MM-dd hh:mm:ss")
         
         payload = {
@@ -252,11 +257,16 @@ class DetectionThread(QThread):
         HEAD_DROP_THRESHOLD = 0.30     # 头部下降占身高比例阈值（每秒）
         # 优化3: 宽高比变化检测（区分跌倒和主动躺下）
         BBOX_RATIO_CHANGE_THRESHOLD = 1.5  # 宽高比变化倍数
+        # 优化4: 坐姿稳定检测（区分坐下和跌倒）
+        SITTING_ANGLE_MIN = 25         # 坐姿角度下限
+        SITTING_ANGLE_MAX = 55         # 坐姿角度上限
+        SITTING_STABLE_FRAMES = int(fps * 2)  # 稳定2秒判定为坐姿
 
         angle_history = deque(maxlen=ANGLE_WINDOW)
         head_y_history = deque(maxlen=max(HEAD_WINDOW, 5))
         bbox_ratio_history = deque(maxlen=ANGLE_WINDOW)
         fall_candidate_frames = 0
+        sitting_stable_frames = 0  # 坐姿稳定计数器
         estimated_body_height_px = 200.0
         # ========== 优化结束 ==========
 
@@ -365,7 +375,8 @@ class DetectionThread(QThread):
                                     is_fall_candidate = False
 
                                     # 特征1: 躯干角度大 + 角速度高（快速倒下 vs 缓慢弯腰）
-                                    if torso_aci > 25 and angular_velocity > ANGULAR_VEL_THRESHOLD:
+                                    # 阈值从25°提高到35°，减少坐下误报
+                                    if torso_aci > 35 and angular_velocity > ANGULAR_VEL_THRESHOLD:
                                         is_fall_candidate = True
 
                                     # 特征2: 头部快速下降（>身高30%/秒）
@@ -373,8 +384,20 @@ class DetectionThread(QThread):
                                         is_fall_candidate = True
 
                                     # 特征3: 宽高比突变 + 角度异常（从站立变平躺）
-                                    if bbox_ratio_change > BBOX_RATIO_CHANGE_THRESHOLD and torso_aci > 25:
+                                    if bbox_ratio_change > BBOX_RATIO_CHANGE_THRESHOLD and torso_aci > 35:
                                         is_fall_candidate = True
+
+                                    # 优化4: 坐姿稳定检测（角度在25-55°且稳定2秒 = 坐下，不是跌倒）
+                                    if SITTING_ANGLE_MIN < torso_aci < SITTING_ANGLE_MAX and angular_velocity < 0.5:
+                                        sitting_stable_frames += 1
+                                        if sitting_stable_frames >= SITTING_STABLE_FRAMES:
+                                            # 确认是坐姿，清空跌倒计数
+                                            current_durus = "坐姿 (Sitting)"
+                                            fall_candidate_frames = 0
+                                            sitting_stable_frames = 0
+                                            is_fall_candidate = False
+                                    else:
+                                        sitting_stable_frames = max(0, sitting_stable_frames - 1)
 
                                     # 连续帧确认（防止单帧误报）
                                     if is_fall_candidate:
@@ -409,6 +432,8 @@ class DetectionThread(QThread):
                                                     f"宽高比x{bbox_ratio_change:.2f}"
                                                 )
                                                 fall_candidate_frames = 0
+                                    elif current_durus == "坐姿 (Sitting)":
+                                        pass  # 保持坐姿状态
                                     elif torso_aci < 20 and angular_velocity < 1.5:
                                         current_durus = "站立 (Normal)"
                                     elif torso_aci > fall_threshold and angular_velocity < 1.0:
@@ -435,6 +460,7 @@ class DetectionThread(QThread):
                     head_y_history.clear()
                     bbox_ratio_history.clear()
                     fall_candidate_frames = 0
+                    sitting_stable_frames = 0
 
                 if self.current_async_writer is not None:
                     dusme_video_yazici = self.current_async_writer

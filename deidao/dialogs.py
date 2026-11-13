@@ -76,6 +76,9 @@ try:
 except ImportError:
     HAS_WEBENGINE = False
 
+# 导入主题系统
+from themes import apply_theme_to_dialog, get_current_theme
+
 # 日志记录器
 logger = logging.getLogger(__name__)
 
@@ -119,6 +122,9 @@ class LoginDialog(QDialog):
         btn_layout.addWidget(btn_cancel)
 
         layout.addLayout(btn_layout)
+        
+        # 应用主题
+        apply_theme_to_dialog(self)
 
     def handle_login(self):
         username = self.txt_user.text().strip()
@@ -152,6 +158,8 @@ class SettingsDialog(QDialog):
         self.resize(600, 340)
         self.settings = current_settings.copy()
         self.initUI()
+        # 应用主题
+        apply_theme_to_dialog(self)
 
     def initUI(self):
         layout = QVBoxLayout(self)
@@ -185,7 +193,7 @@ class SettingsDialog(QDialog):
 
         self.txt_webhook = QLineEdit()
         self.txt_webhook.setPlaceholderText("请输入飞书机器人 Webhook 链接")
-        self.txt_webhook.setText("https://open.feishu.cn/open-apis/bot/v2/hook/e1d06cee-2c38-4679-962a-9fccb85fd766")
+        self.txt_webhook.setText(current_settings.get("feishu_webhook", ""))
         self.txt_webhook.setReadOnly(True)  
         form_layout.addRow("飞书Webhook:", self.txt_webhook)
 
@@ -206,7 +214,7 @@ class SettingsDialog(QDialog):
         self.settings["fall_threshold"] = self.slider_angle.value()
         self.settings["sound_enabled"] = self.chk_sound.isChecked()
         self.settings["buffer_seconds"] = self.slider_buffer.value()
-        self.settings["feishu_webhook"] = "https://open.feishu.cn/open-apis/bot/v2/hook/e1d06cee-2c38-4679-962a-9fccb85fd766"
+        self.settings["feishu_webhook"] = self.txt_webhook.text().strip()
         self.accept()
 
 
@@ -225,6 +233,8 @@ class HistoryDialog(QDialog):
 
         self.initUI()
         self.load_logs_from_db()
+        # 应用主题
+        apply_theme_to_dialog(self)
 
     def initUI(self):
         main_layout = QHBoxLayout(self)
@@ -533,6 +543,8 @@ class AlarmPopupDialog(QDialog):
         super().__init__(parent)
         self.alarm = alarm_record
         self.initUI()
+        # 应用主题
+        apply_theme_to_dialog(self)
     
     def initUI(self):
         self.setWindowTitle("⚠️ 健康告警通知")
@@ -608,6 +620,8 @@ class HealthTrendDialog(QDialog):
         self.history_data = history_data
         self.current_range = "24h"
         self.initUI()
+        # 应用主题
+        apply_theme_to_dialog(self)
     
     def initUI(self):
         self.setWindowTitle(f" {self.metric_name} - 健康趋势分析")
@@ -618,6 +632,14 @@ class HealthTrendDialog(QDialog):
         ctrl_layout.addWidget(QLabel("时间范围:"))
         self.range_combo = QComboBox()
         self.range_combo.addItems(["24 小时", "7 天", "30 天"])
+        self.range_combo.setStyleSheet(
+            "QComboBox { background-color: #1E293B; border: 1px solid #475569; border-radius: 6px; "
+            "color: #F8FAFC; padding: 6px 10px; font-size: 13px; }"
+            "QComboBox::drop-down { border: none; width: 28px; }"
+            "QComboBox::down-arrow { image: none; border-left: 5px solid transparent; border-right: 5px solid transparent; "
+            "border-top: 6px solid #94A3B8; margin-right: 6px; }"
+            "QComboBox QAbstractItemView { background-color: #1E293B; color: #F8FAFC; selection-background-color: #38BDF8; }"
+        )
         self.range_combo.currentTextChanged.connect(self.on_range_changed)
         ctrl_layout.addWidget(self.range_combo)
         ctrl_layout.addStretch()
@@ -705,6 +727,8 @@ class HealthDashboardDialog(QDialog):
         self.alarm_sound_path = os.path.join(os.path.dirname(__file__), 'health_alarm.mp3')
         self.initUI()
         self.start_data_source()
+        # 应用主题
+        apply_theme_to_dialog(self)
 
     def initUI(self):
         main_layout = QVBoxLayout(self)
@@ -1049,7 +1073,12 @@ class HealthDashboardDialog(QDialog):
         if os.path.exists(self.alarm_sound_path):
             try:
                 import pygame
-                pygame.mixer.init()
+                # 只在 mixer 未初始化时才初始化，避免重复 init 导致声音异常
+                if not pygame.mixer.get_init():
+                    pygame.mixer.init()
+                # 如果音乐正在播放，不要重复播放（避免声音不断从头重播）
+                if pygame.mixer.music.get_busy():
+                    return
                 pygame.mixer.music.load(self.alarm_sound_path)
                 pygame.mixer.music.play()
             except Exception:
@@ -1247,6 +1276,8 @@ class EmotionDetectionDialog(QDialog):
         self._tts_finished_signal.connect(self._on_tts_finished)
 
         self.initUI()
+        # 应用主题
+        apply_theme_to_dialog(self)
 
     def initUI(self):
         main_layout = QHBoxLayout(self)
@@ -2425,6 +2456,8 @@ class AISmartDialog(QDialog):
         self._chat_history = []
         self._current_model_mode = "kimi"  # "kimi" 或 "local"
         self.initUI()
+        # 应用主题
+        apply_theme_to_dialog(self)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -2496,6 +2529,14 @@ class AISmartDialog(QDialog):
         top_ctrl.addWidget(QLabel("语音引擎:"))
         self.engine_combo = QComboBox()
         self.engine_combo.addItems(["Google 在线识别 (需联网)", "Vosk 离线识别 (需本地模型)"])
+        self.engine_combo.setStyleSheet(
+            "QComboBox { background-color: #1E293B; border: 1px solid #475569; border-radius: 6px; "
+            "color: #F8FAFC; padding: 6px 10px; font-size: 13px; }"
+            "QComboBox::drop-down { border: none; width: 28px; }"
+            "QComboBox::down-arrow { image: none; border-left: 5px solid transparent; border-right: 5px solid transparent; "
+            "border-top: 6px solid #94A3B8; margin-right: 6px; }"
+            "QComboBox QAbstractItemView { background-color: #1E293B; color: #F8FAFC; selection-background-color: #38BDF8; }"
+        )
         # 默认走 Vosk（国内环境 Google 不可达），如果你想用 Google 可以手动改回
         self.engine_combo.setCurrentIndex(1)
         top_ctrl.addWidget(self.engine_combo)
