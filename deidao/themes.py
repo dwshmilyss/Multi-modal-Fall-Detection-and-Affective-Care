@@ -713,10 +713,14 @@ def themed_critical(parent, title: str, text: str):
 
 
 def themed_question(parent, title: str, text: str, 
-                    buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    default=QMessageBox.StandardButton.No):
+                    buttons=None,
+                    default=None):
     """主题化的询问提示框"""
     from PyQt6.QtWidgets import QMessageBox
+    if buttons is None:
+        buttons = QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+    if default is None:
+        default = QMessageBox.StandardButton.No
     t = get_current_theme()
     msg = QMessageBox(parent)
     msg.setIcon(QMessageBox.Icon.Question)

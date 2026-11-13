@@ -435,7 +435,7 @@ class DetectionThread(QThread):
                                     # 调试日志：状态变化或候选帧变化时输出
                                     if current_durus != prev_debug_durus or fall_candidate_frames != prev_debug_fall_frames or is_fall_candidate or fall_reasons:
                                         debug_msg = (
-                                            f"[调试] 状态={current_durus} 角度={torso_aci:.0f}° 角速度={angular_velocity:.1f} "
+                                            # f"[调试] 状态={current_durus} 角度={torso_aci:.0f}° 角速度={angular_velocity:.1f} "
                                             f"髋部={hip_height_ratio:.2f} 髋部降={hip_drop_per_sec:.0f}px/s "
                                             f"头降={head_drop_per_sec:.0f}px/s "
                                             f"宽高比={bbox_ratio:.2f}({bbox_ratio_change:.2f}x) "
@@ -456,7 +456,7 @@ class DetectionThread(QThread):
                                     # 方案A: 恢复检测 - 如果角度恢复到<25°，说明是弯腰后恢复，清除候选帧
                                     if torso_aci < 25 and fall_candidate_frames > 0:
                                         fall_candidate_frames = 0
-                                        print("[调试] 检测到恢复动作（角度<25°），清除候选帧", flush=True)
+                                        # print("[调试] 检测到恢复动作（角度<25°），清除候选帧", flush=True)
 
                                     # ========== 状态判定 ==========
                                     if fall_candidate_frames >= FALL_CONSECUTIVE:
