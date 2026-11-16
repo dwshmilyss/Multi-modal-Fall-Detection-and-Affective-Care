@@ -547,14 +547,14 @@ class DetectionThread(QThread):
 
 EMOTION_CN_MAP = {
     "angry": "愤怒",
-    "disgust": "厌恶",
-    "fear": "恐惧",
     "fearful": "恐惧",
+    "fear": "恐惧",
     "happy": "高兴",
-    "sad": "悲伤",
-    "surprise": "惊讶",
     "neutral": "平静",
     "calm": "平静",
+    "sad": "悲伤",
+    "disgust": "厌恶",
+    "surprise": "惊讶",
     "confused": "困惑",
     "contempt": "轻蔑",
 }
@@ -562,7 +562,8 @@ EMOTION_CN_MAP = {
 
 def _default_emotion_order():
     """默认情绪顺序（若模型本身不带 names 时兜底）。"""
-    return ["angry", "disgust", "fear", "happy", "sad", "surprise", "neutral"]
+    # 与 best.onnx 模型类别一致：Angry, Fearful, Happy, Neutral, Sad
+    return ["angry", "fearful", "happy", "neutral", "sad"]
 
 
 def _resolve_emotion_device():

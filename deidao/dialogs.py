@@ -1439,7 +1439,8 @@ class EmotionDetectionDialog(QDialog):
     def _init_dist_rows(self, ordered=None):
         """初始化情绪分布行 (名称 + 进度条 + 百分比)。"""
         if ordered is None:
-            ordered = ["高兴", "平静", "悲伤", "愤怒", "惊讶", "恐惧", "厌恶"]
+            # 与 best.onnx 模型类别一致：Angry, Fearful, Happy, Neutral, Sad
+            ordered = ["高兴", "平静", "悲伤", "愤怒", "恐惧"]
         from PyQt6.QtWidgets import QProgressBar
         self._dist_rows = {}
         self._dist_order = list(ordered)

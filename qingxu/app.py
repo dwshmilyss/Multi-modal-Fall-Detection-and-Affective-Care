@@ -347,11 +347,11 @@ class VideoRecorder:
 class EmotionDetector:
     """面部情绪检测器"""
 
-    # 情绪标签映射 (英文 -> 中文)
+    # 情绪标签映射 (英文 -> 中文) - 与 best.onnx 模型类别顺序一致
     EMOTION_CN = {
         "Angry": "愤怒",
         "Fearful": "恐惧",
-        "Happy": "开心",
+        "Happy": "高兴",
         "Neutral": "平静",
         "Sad": "悲伤",
     }

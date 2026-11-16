@@ -177,5 +177,4 @@ python test_alarm_system.py
 ---
 
 **版本**: v1.0  
-**更新日期**: 2026-11-07  
-**作者**: AI Assistant
+**更新日期**: 2026-11-07
