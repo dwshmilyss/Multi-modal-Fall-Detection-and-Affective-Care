@@ -210,3 +210,93 @@ nvidia-cuda-nvrtc-cu12  # CUDA NVRTC
 - ✅ `deidao` 的情绪检测弹窗复用 `best.onnx`，自动继承 GPU 加速
 - ✅ 所有新功能可通过参数关闭，保持向后兼容
 - ✅ Windows 中文编码问题已处理（PYTHONIOENCODING=utf-8）
+
+---
+
+## 优化记录 (2026-11-16)
+
+### 1. 情绪时序平滑优化（方案B）
+
+**问题**: 摄像头实时检测时，情绪识别结果在帧间跳动频繁，用户体验不佳。
+
+**原因分析**:
+- 每帧独立进行情绪判断，没有考虑时序连续性
+- 模型对相似情绪的区分能力有限（如平静 vs 悲伤）
+- 光照、角度等微小变化导致检测结果波动
+
+**解决方案**:
+
+1. **新增 smoother.py 模块**
+   - 实现 EmotionSmoother 类，提供时序平滑功能
+   - 采用滑动窗口 + 连续帧确认策略
+
+2. **平滑策略**
+   ```
+   原始检测:  Happy -> Sad -> Happy -> Sad -> Sad -> Sad -> ...
+              |       |       |       |       |       |
+   平滑输出:  Happy   Happy   Happy   Happy   Happy   Sad
+                                       (需要连续3帧才切换)
+   ```
+
+3. **核心参数**
+   | 参数 | 默认值 | 说明 |
+   |------|--------|------|
+   | window_size | 10 | 滑动窗口大小（帧数） |
+   | min_stable_frames | 3 | 新情绪需要连续出现的最小帧数才切换 |
+
+4. **集成位置**
+   - qingxu/app.py: 在 EmotionDetector 中集成 EmotionSmoother
+   - deidao/detector.py: 增强 _smooth_label() 方法
+
+**代码示例**:
+```python
+from smoother import EmotionSmoother
+
+smoother = EmotionSmoother(window_size=10, min_stable_frames=3)
+stable_emotion, stable_conf = smoother.update(detected_emotion, confidence)
+```
+
+**效果**:
+- 显著减少情绪跳动，输出更稳定
+- 响应延迟约 0.1-0.3 秒（3帧 @30fps）
+- 不需要重新训练模型，零成本优化
+
+**调参建议**:
+- 如果希望更稳定：增大 min_stable_frames（如 5）
+- 如果希望响应更快：减小 min_stable_frames（如 2）
+
+### 2. UI 情绪类别对齐
+
+**问题**: deidao/dialogs.py 中 UI 显示 7 类情绪进度条，但模型只输出 5 类。
+
+**解决方案**: 修改 dialogs.py，将 UI 默认情绪顺序从 7 类改为 5 类，与 best.onnx 模型一致。
+
+```python
+# 修改前
+ordered = ["高兴", "平静", "悲伤", "愤怒", "惊讶", "恐惧", "厌恶"]
+
+# 修改后
+ordered = ["高兴", "平静", "悲伤", "愤怒", "恐惧"]
+```
+
+**影响范围**:
+- UI 进度条与模型实际输出一致
+- 文本分析、AI 提示词等保留原有 7 类映射，为将来扩展留有余地
+
+### 3. 文件结构更新
+
+```
+qingxu/
+├── app.py              # 主程序（已集成 EmotionSmoother）
+├── smoother.py         # 新增：情绪时序平滑器
+├── config.yaml         # 配置文件
+├── best.onnx           # YOLOv11 情绪检测模型
+├── test_app_v2.py      # 测试脚本
+└── output/
+    ├── screenshots/    # 截图
+    ├── recordings/     # 录像
+    ├── logs/           # CSV 日志
+    ├── emotion_history.json
+    ├── emotion_trend.png
+    └── emotion_distribution.png
+```

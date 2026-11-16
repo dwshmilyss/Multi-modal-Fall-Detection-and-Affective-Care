@@ -624,7 +624,10 @@ class EmotionDetectionThread(QThread):
         self._hard_stop = False
         self._device = "cpu"
         self._class_names_en = _default_emotion_order()
-        self._smooth_window = deque(maxlen=15)
+        self._smooth_window = deque(maxlen=15)  # 存储 (emotion, confidence) 元组
+        self._stable_emotion = None  # 当前稳定输出的情绪
+        self._stable_count = 0  # 当前情绪连续出现次数
+        self._min_stable_frames = 3  # 新情绪需要连续出现的最小帧数
         self._emotion_stats = {k: 0 for k in self._class_names_en}
         # 轮询方案：子线程只把帧写到这里（加锁），主线程 QTimer 每 33ms 来取
         self._latest_frame = None
@@ -869,7 +872,7 @@ class EmotionDetectionThread(QThread):
                     pass
 
             if top_label_en:
-                self._smooth_window.append(top_label_en)
+                self._smooth_window.append((top_label_en, float(top_conf)))
                 self._emotion_stats[top_label_en] = self._emotion_stats.get(top_label_en, 0) + 1
 
             smooth_label_en = self._smooth_label()
@@ -997,12 +1000,27 @@ class EmotionDetectionThread(QThread):
         return top_label_en, top_conf, label_dist
 
     def _smooth_label(self):
+        """情绪时序平滑 - 基于最近连续帧判断切换"""
         if not self._smooth_window:
-            return None
-        counts = {}
-        for k in self._smooth_window:
-            counts[k] = counts.get(k, 0) + 1
-        return max(counts, key=counts.get)
+            return self._stable_emotion
+        
+        # 首次检测，直接输出
+        if self._stable_emotion is None:
+            latest = list(self._smooth_window)[-1]
+            self._stable_emotion = latest[0] if isinstance(latest, tuple) else latest
+            return self._stable_emotion
+        
+        # 检查最近 min_stable_frames 帧是否都是同一个情绪
+        if len(self._smooth_window) >= self._min_stable_frames:
+            recent = list(self._smooth_window)[-self._min_stable_frames:]
+            recent_emotions = [item[0] if isinstance(item, tuple) else item for item in recent]
+            
+            if len(set(recent_emotions)) == 1:
+                new_emotion = recent_emotions[0]
+                if new_emotion != self._stable_emotion:
+                    self._stable_emotion = new_emotion
+        
+        return self._stable_emotion
 
     def get_stats_summary(self):
         total = sum(self._emotion_stats.values())

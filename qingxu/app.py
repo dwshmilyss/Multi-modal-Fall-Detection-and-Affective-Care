@@ -42,6 +42,7 @@ if sys.platform == "win32":
 import cv2
 import numpy as np
 from ultralytics import YOLO
+from smoother import EmotionSmoother
 
 # 可选依赖
 try:
@@ -379,6 +380,9 @@ class EmotionDetector:
         # 情绪历史记录器
         self.history_recorder = EmotionHistoryRecorder(interval=5)
         
+        # 情绪时序平滑器
+        self.smoother = EmotionSmoother(window_size=10, min_stable_frames=3)
+        
         # CSV 日志记录器
         self.logger = None
         if enable_log:
@@ -510,15 +514,23 @@ class EmotionDetector:
                 )
                 y_offset += 20
         
-        # 主导情绪 (左下角)
-        dominant_emotion, dominant_pct = self._get_dominant_emotion()
-        if dominant_emotion != "Unknown":
-            cn_name = self.EMOTION_CN.get(dominant_emotion, dominant_emotion)
-            dominant_text = f"Dominant: {cn_name} ({dominant_pct:.0f}%)"
+        # 当前情绪 (左下角) - 使用时序平滑后的结果
+        if self.current_smooth_emotion:
+            cn_name = self.EMOTION_CN.get(self.current_smooth_emotion, self.current_smooth_emotion)
+            emotion_text = f"Current: {cn_name} ({self.current_smooth_confidence*100:.0f}%)"
             cv2.putText(
-                frame, dominant_text, (10, h - 60),
+                frame, emotion_text, (10, h - 60),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2,
             )
+        else:
+            dominant_emotion, dominant_pct = self._get_dominant_emotion()
+            if dominant_emotion != "Unknown":
+                cn_name = self.EMOTION_CN.get(dominant_emotion, dominant_emotion)
+                dominant_text = f"Dominant: {cn_name} ({dominant_pct:.0f}%)"
+                cv2.putText(
+                    frame, dominant_text, (10, h - 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2,
+                )
         
         # 情绪稳定度
         stability = self._get_emotion_stability()
@@ -546,6 +558,24 @@ class EmotionDetector:
 
         # 更新统计
         self._update_stats(result)
+        
+        # 时序平滑: 提取当前帧主导情绪并通过平滑器
+        self.current_smooth_emotion = None
+        self.current_smooth_confidence = 0.0
+        if result.boxes is not None and len(result.boxes) > 0:
+            # 找到置信度最高的检测
+            best_conf = 0.0
+            best_name = None
+            for box in result.boxes:
+                conf = float(box.conf[0])
+                if conf > best_conf:
+                    best_conf = conf
+                    cls_id = int(box.cls[0])
+                    best_name = result.names.get(cls_id, None)
+            if best_name:
+                stable_emo, stable_conf = self.smoother.update(best_name, best_conf)
+                self.current_smooth_emotion = stable_emo
+                self.current_smooth_confidence = stable_conf
         
         # 更新历史记录
         self.history_recorder.record_if_needed()
