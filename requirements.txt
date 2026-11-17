@@ -18,6 +18,9 @@ torchvision>=0.16.0
 torchaudio>=2.1.0
 ultralytics>=8.2.0
 mediapipe>=0.10.7
+# ONNX 模型导出（notebook 训练后导出 best.onnx 用）
+# ⚠️ 必须 <1.17：onnx 1.17+ 要求 protobuf>=5.26，与 mediapipe(protobuf<5) 冲突
+onnx>=1.16.2,<1.17
 
 # ---------------- 音频 / TTS / 语音 ----------------
 # 离线 TTS（中文 SAPI5 走 Windows 自带）

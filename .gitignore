@@ -32,6 +32,8 @@ env/
 qingxu/Emotion-Detection-1
 qingxu/dataset
 qingxu/runs
+qingxu/output
+qingxu/pro_emotion
 deidao/result
 test_videos
 

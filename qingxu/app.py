@@ -757,6 +757,18 @@ def parse_args():
     return parser.parse_args()
 
 
+def find_available_camera(max_index=5):
+    """尝试找到可用的摄像头（返回摄像头索引，找不到返回 None）"""
+    for i in range(max_index):
+        cap = cv2.VideoCapture(i)
+        if cap.isOpened():
+            print(f"[OK] 找到可用摄像头: 索引 {i}")
+            cap.release()
+            return i
+        cap.release()
+    return None
+
+
 # ============== 主函数 ==============
 
 def main():
