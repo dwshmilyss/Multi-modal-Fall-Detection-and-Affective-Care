@@ -49,6 +49,16 @@ import threading
 from database import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 from PyQt6.QtCore import QThread, pyqtSignal, QDateTime
 
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+from qingxu.emotion_pipeline import (  # noqa: E402
+    EMOTION_LABELS,
+    ViTFaceEmotionRecognizer,
+    draw_emotion_result,
+)
+del _project_root
+
 def cv2_add_chinese_text(img, text, position, font_size=20, color=(0, 255, 0)):
     img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
     draw = ImageDraw.Draw(img_pil)
@@ -543,7 +553,7 @@ class DetectionThread(QThread):
         self.log_signal.emit(" 视频流已关闭。")
 
 
-# ==================== 情绪检测线程（基于 YOLOv11 onnx） ====================
+# ==================== 情绪检测线程（MediaPipe + ViT ONNX） ====================
 
 EMOTION_CN_MAP = {
     "angry": "愤怒",
@@ -561,9 +571,8 @@ EMOTION_CN_MAP = {
 
 
 def _default_emotion_order():
-    """默认情绪顺序（若模型本身不带 names 时兜底）。"""
-    # 与 best.onnx 模型类别一致：Angry, Fearful, Happy, Neutral, Sad
-    return ["angry", "fearful", "happy", "neutral", "sad"]
+    """返回 ViT 情绪模型的七类顺序。"""
+    return list(EMOTION_LABELS)
 
 
 def _resolve_emotion_device():
@@ -612,7 +621,7 @@ _EMOTION_DEVICE, _EMOTION_HAS_GPU = _resolve_emotion_device()
 
 
 class EmotionDetectionThread(QThread):
-    """独立弹窗使用的情绪检测线程，复用 qingxu/app.py 的 best.onnx 推理流程。"""
+    """独立弹窗使用的两阶段情绪检测线程。"""
     change_pixmap_signal = pyqtSignal(np.ndarray, str, float, dict)
     log_signal = pyqtSignal(str)
 
@@ -624,11 +633,11 @@ class EmotionDetectionThread(QThread):
         self._hard_stop = False
         self._device = "cpu"
         self._class_names_en = _default_emotion_order()
-        self._smooth_window = deque(maxlen=15)  # 存储 (emotion, confidence) 元组
-        self._stable_emotion = None  # 当前稳定输出的情绪
-        self._stable_count = 0  # 当前情绪连续出现次数
-        self._min_stable_frames = 3  # 新情绪需要连续出现的最小帧数
         self._emotion_stats = {k: 0 for k in self._class_names_en}
+        self._recognizer = None
+        self._last_result = None
+        self._next_inference_time = 0.0
+        self._inference_interval = 0.05
         # 轮询方案：子线程只把帧写到这里（加锁），主线程 QTimer 每 33ms 来取
         self._latest_frame = None
         self._latest_payload = ("--", 0.0, {})
@@ -657,73 +666,29 @@ class EmotionDetectionThread(QThread):
         self.running = True
 
     def reset_stats(self):
-        self._smooth_window.clear()
         self._emotion_stats = {k: 0 for k in self._class_names_en}
+        if self._recognizer is not None:
+            self._recognizer.smoother.reset()
 
-    def _sync_labels_from_model(self, model):
-        """从真实模型读取类别顺序，避免硬编码和真实数据集不一致。
-        ultralytics 11.x: model.names 在不同 task 下可能是 dict{id:str} 或 list[str]，必须兼容。
-        """
+    def _close_recognizer(self):
+        if self._recognizer is None:
+            return
         try:
-            names_raw = getattr(model, "names", None)
-            if not names_raw:
-                return
-            names_en = []
-            if isinstance(names_raw, dict):
-                for k in sorted(names_raw.keys()):
-                    try:
-                        names_en.append(str(names_raw[k]).lower())
-                    except Exception:
-                        continue
-            elif isinstance(names_raw, (list, tuple)):
-                for n in names_raw:
-                    try:
-                        names_en.append(str(n).lower())
-                    except Exception:
-                        continue
-            else:
-                names_en = [str(names_raw).lower()]
-            # 兜底：万一解析后为空
-            if not names_en:
-                names_en = _default_emotion_order()
-            self._class_names_en = names_en
-            self._emotion_stats = {k: 0 for k in self._class_names_en}
-            self.log_signal.emit(f"情绪类别({len(self._class_names_en)}): {self._class_names_en}")
-        except Exception as e:
-            self.log_signal.emit(f"️ 读取模型类别名失败: {e}")
+            self._recognizer.close()
+        except Exception:
+            pass
+        finally:
+            self._recognizer = None
 
     def run(self):
         self.log_signal.emit(f" 正在加载情绪识别模型: {self.model_path}")
         try:
-            is_onnx = str(self.model_path).lower().endswith(".onnx")
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    self._device = "cuda:0"
-                    self.log_signal.emit(f" 使用 GPU 推理: {torch.cuda.get_device_name(0)}")
-                else:
-                    self._device = "cpu"
-                    self.log_signal.emit("️ 未检测到 CUDA，回退到 CPU 推理")
-            except ImportError:
-                self._device = "cpu"
-                self.log_signal.emit("️ 未安装 torch，回退到 CPU 推理")
-            model = YOLO(self.model_path, task="detect")
-            if self._device != "cpu" and not is_onnx:
-                try:
-                    model.to(self._device)
-                    self.log_signal.emit(f" 情绪模型已搬到 {self._device}")
-                except Exception as e:
-                    self.log_signal.emit(f" 情绪模型搬设备失败，回退到 CPU: {e}")
-                    self._device = "cpu"
-            elif is_onnx:
-                # ONNX 模型让 ultralytics 自动选 provider（CPU/CUDA），不再 .to() 强制。
-                # 不在首帧前访问 model.names，否则会提前创建一次 ONNX Runtime 后端，
-                # 随后的 predict 又创建一次，表现为控制台重复打印 Loading。
-                self.log_signal.emit(" ONNX 模型已就绪，推理时由 ultralytics 自动选择 provider")
-                self._labels_synced = False
-            else:
-                self._sync_labels_from_model(model)
-                self._labels_synced = True
+            self._recognizer = ViTFaceEmotionRecognizer(model_path=self.model_path)
+            self._device = self._recognizer.provider_description
+            self.log_signal.emit(
+                " 两阶段模型已就绪: MediaPipe Face Detection + ViT 7-class ONNX"
+            )
+            self.log_signal.emit(f" ONNX Runtime provider: {self._device}")
         except Exception as e:
             self.log_signal.emit(f" 情绪模型加载失败: {e}")
             return
@@ -743,6 +708,7 @@ class EmotionDetectionThread(QThread):
                 self.change_pixmap_signal.emit(placeholder, "--", 0.0, {})
             except Exception:
                 pass
+            self._close_recognizer()
             return
         try:
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -782,6 +748,8 @@ class EmotionDetectionThread(QThread):
         self.log_signal.emit(f" 情绪检测视频流已建立 [源={self.source}] 后端=DSHOW 暖机{'成功' if warm_frame is not None else '失败'}")
 
         last_emit_ts = time.time()
+        self._last_result = None
+        self._next_inference_time = time.perf_counter()
 
         while not self._hard_stop:
             while not self.running and not self._hard_stop:
@@ -831,53 +799,37 @@ class EmotionDetectionThread(QThread):
                 continue
             last_emit_ts = time.time()
 
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            gray_3d = cv2.merge([gray, gray, gray])
-
-            # YOLO wrapper 内部自动 letterbox+normalize；直接传原始尺寸即可
-            # 模型文件大小确认是 640x640 训练，letterbox 后送网络
-
-            results = None
-            _t0 = time.time()
             if getattr(self, "_hard_stop", False):
                 break
             if not getattr(self, "running", False):
                 continue
-            try:
-                results = model.predict(gray_3d, verbose=False)
-            except Exception as e:
-                self.log_signal.emit(f" 情绪推理异常: {type(e).__name__}: {e}")
-                import traceback
-                self.log_signal.emit(f" traceback: {traceback.format_exc()[:500]}")
-            _dt = time.time() - _t0
-            if not hasattr(self, "_first_inf_logged"):
-                self._first_inf_logged = True
-                self.log_signal.emit(f" 首次情绪推理耗时 {_dt*1000:.0f} ms on {self._device} 输入尺寸={gray_3d.shape}")
-            elif _dt > 1.0:
-                self.log_signal.emit(f" 情绪推理偏慢 {_dt*1000:.0f} ms on {self._device}")
 
-            if results and not getattr(self, "_labels_synced", False):
-                self._sync_labels_from_model(results[0])
-                self._labels_synced = True
+            result = self._last_result
+            if time.perf_counter() >= self._next_inference_time:
+                result = self._recognizer.process(frame)
+                self._last_result = result
+                self._next_inference_time = time.perf_counter() + self._inference_interval
+                if not getattr(self, "_first_inf_logged", False):
+                    self._first_inf_logged = True
+                    self.log_signal.emit(
+                        f" 首次两阶段情绪推理耗时 {result.inference_ms:.0f} ms on {self._device}"
+                    )
+                elif result.inference_ms > 1500 and self._heartbeat_n % 30 == 0:
+                    self.log_signal.emit(f" 情绪推理偏慢 {result.inference_ms:.0f} ms on {self._device}")
 
-            top_label_en, top_conf, label_dist = self._extract_top_emotion(results)
+                if result.emotion_en:
+                    self._emotion_stats[result.emotion_en] = (
+                        self._emotion_stats.get(result.emotion_en, 0) + 1
+                    )
 
-            annotated = frame
-            if results is not None and len(results) > 0:
-                try:
-                    plotted = results[0].plot()
-                    if isinstance(plotted, np.ndarray) and plotted.size > 0:
-                        annotated = plotted
-                except Exception:
-                    pass
-
-            if top_label_en:
-                self._smooth_window.append((top_label_en, float(top_conf)))
-                self._emotion_stats[top_label_en] = self._emotion_stats.get(top_label_en, 0) + 1
-
-            smooth_label_en = self._smooth_label()
-            smooth_label_cn = EMOTION_CN_MAP.get(smooth_label_en or "", smooth_label_en or "--")
+            annotated = draw_emotion_result(frame, result) if result is not None else frame.copy()
+            smooth_label_cn = result.emotion_cn if result is not None and result.emotion_cn else "--"
             self._current_emotion_cn = smooth_label_cn
+            top_conf = result.confidence if result is not None else 0.0
+            label_dist = {
+                EMOTION_CN_MAP.get(label, label): float(score)
+                for label, score in (result.probabilities.items() if result is not None else {})
+            }
 
             try:
                 if getattr(self, "running", False) and not getattr(self, "_hard_stop", False):
@@ -899,128 +851,8 @@ class EmotionDetectionThread(QThread):
         except Exception:
             pass
         self._cap = None
+        self._close_recognizer()
         self.log_signal.emit(" 情绪检测视频流已关闭")
-
-    def _extract_top_emotion(self, results):
-        """从 YOLOv11 分类结果中提取最高置信度的情绪标签。整段异常都会被吞，绝不抛到 UI 线程。"""
-        names = self._class_names_en or _default_emotion_order()
-        label_dist = {EMOTION_CN_MAP.get(k, k): 0.0 for k in names if isinstance(k, str)}
-        top_label_en = None
-        top_conf = 0.0
-
-        if not results:
-            return None, 0.0, label_dist
-
-        try:
-            result = results[0]
-            names_map = getattr(result, "names", {}) or {}
-
-            if hasattr(result, "boxes") and result.boxes is not None and len(result.boxes) > 0:
-                boxes = result.boxes
-                try:
-                    confs = boxes.conf
-                    if hasattr(confs, "cpu"):
-                        confs = confs.cpu().numpy()
-                    confs = np.asarray(confs, dtype=np.float32).flatten()
-                except Exception:
-                    confs = np.zeros(len(boxes), dtype=np.float32)
-                try:
-                    cls_ids = boxes.cls
-                    if hasattr(cls_ids, "cpu"):
-                        cls_ids = cls_ids.cpu().numpy()
-                    cls_ids = np.asarray(cls_ids, dtype=np.int64).flatten()
-                except Exception:
-                    cls_ids = np.zeros(len(boxes), dtype=np.int64)
-
-                if len(cls_ids) == 0:
-                    return None, 0.0, label_dist
-
-                best_i = int(np.argmax(confs)) if len(confs) > 0 else 0
-                best_conf = float(confs[best_i]) if len(confs) > 0 else 0.0
-                cls_id = int(cls_ids[best_i])
-                cls_name = None
-                if isinstance(names_map, dict):
-                    cls_name = names_map.get(cls_id)
-                elif isinstance(names_map, (list, tuple)) and 0 <= cls_id < len(names_map):
-                    cls_name = names_map[cls_id]
-                if cls_name is not None:
-                    top_label_en = str(cls_name).lower()
-                    top_conf = best_conf
-
-                counts = {EMOTION_CN_MAP.get(k, k): 0.0 for k in names if isinstance(k, str)}
-                for cn in counts.keys():
-                    counts[cn] = 0.0
-                total_score = 0.0
-                for ci, cf in zip(cls_ids, confs):
-                    name_en = None
-                    if isinstance(names_map, dict):
-                        name_en = names_map.get(int(ci))
-                    elif isinstance(names_map, (list, tuple)) and 0 <= int(ci) < len(names_map):
-                        name_en = names_map[int(ci)]
-                    if name_en is None:
-                        continue
-                    cn = EMOTION_CN_MAP.get(str(name_en).lower(), str(name_en).lower())
-                    counts[cn] = counts.get(cn, 0.0) + float(cf)
-                    total_score += float(cf)
-                if total_score > 0:
-                    for k in list(counts.keys()):
-                        counts[k] = round(counts[k] / total_score, 4)
-                for k, v in counts.items():
-                    label_dist[k] = v
-                return top_label_en, top_conf, label_dist
-
-            if hasattr(result, "probs") and result.probs is not None:
-                try:
-                    top1_idx = int(result.probs.top1)
-                except Exception:
-                    top1_idx = -1
-                try:
-                    top_conf = float(result.probs.top1conf)
-                except Exception:
-                    top_conf = 0.0
-                if 0 <= top1_idx < len(names):
-                    candidate = names[top1_idx]
-                    if isinstance(candidate, str):
-                        top_label_en = candidate
-                try:
-                    probs_arr = np.asarray(result.probs.data, dtype=np.float32)
-                except Exception:
-                    probs_arr = np.zeros(len(names), dtype=np.float32)
-                for i, cls_en in enumerate(names):
-                    if not isinstance(cls_en, str):
-                        continue
-                    if i < len(probs_arr):
-                        try:
-                            label_dist[EMOTION_CN_MAP.get(cls_en, cls_en)] = float(probs_arr[i])
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-
-        return top_label_en, top_conf, label_dist
-
-    def _smooth_label(self):
-        """情绪时序平滑 - 基于最近连续帧判断切换"""
-        if not self._smooth_window:
-            return self._stable_emotion
-        
-        # 首次检测，直接输出
-        if self._stable_emotion is None:
-            latest = list(self._smooth_window)[-1]
-            self._stable_emotion = latest[0] if isinstance(latest, tuple) else latest
-            return self._stable_emotion
-        
-        # 检查最近 min_stable_frames 帧是否都是同一个情绪
-        if len(self._smooth_window) >= self._min_stable_frames:
-            recent = list(self._smooth_window)[-self._min_stable_frames:]
-            recent_emotions = [item[0] if isinstance(item, tuple) else item for item in recent]
-            
-            if len(set(recent_emotions)) == 1:
-                new_emotion = recent_emotions[0]
-                if new_emotion != self._stable_emotion:
-                    self._stable_emotion = new_emotion
-        
-        return self._stable_emotion
 
     def get_stats_summary(self):
         total = sum(self._emotion_stats.values())

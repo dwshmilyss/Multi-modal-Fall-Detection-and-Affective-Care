@@ -1,6 +1,6 @@
 # AI-Vision-Guardian: Multi-modal Fall Detection and Affective Care
 
-> **AI-Vision-Guardian: Multi-modal Fall Detection and Affective Care** — a desktop elderly-care system combining **YOLOv8 + MediaPipe Pose + PyQt6 + MySQL** with **YOLOv11 facial emotion recognition**, **Vosk offline speech recognition**, **Kimi LLM** and **pyttsx3 / SAPI5 Chinese TTS**.
+> **AI-Vision-Guardian: Multi-modal Fall Detection and Affective Care** — a desktop elderly-care system combining **YOLOv8 + MediaPipe Pose + PyQt6 + MySQL** with **MediaPipe + ViT facial emotion recognition**, **Vosk offline speech recognition**, **Kimi LLM** and **pyttsx3 / SAPI5 Chinese TTS**.
 >
 > 适用于智慧养老、智能安防、毕业设计等场景；检测结果不应作为医疗诊断或唯一安全决策依据。
 
@@ -23,17 +23,19 @@
 | **弯腰误报抑制** | 恢复检测 + 角速度阈值 + 髋部下降速率，防止弯腰误报 |
 | 前置缓冲区录像 | 跌倒告警自动拼接 N 秒前置视频，存盘至 `result/` |
 | MySQL 历史回放 | `alarm_logs` 表可追溯，含家属处理意见 |
-| 飞书机器人推送 | 交互卡片实时同步给值班家属 |
+| 飞书机器人推送 | 检测到跌倒即向飞书群推送交互卡片（时间/录像存档/系统状态） |
 | 双角色系统 | 管理员运维端（`root`）/ 家属亲情看护端（`family`） |
-| 健康指标大屏 | 心率/血氧/血压/步数/体温/电量（演示数据，可对接硬件） |
+| 健康指标大屏 | 心率/血氧/血压/步数/体温/电量，每 2 秒刷新；点击卡片看 ECharts 趋势图，可导出 CSV 报告 |
+| **智能健康告警** | 警告/危险两级告警 + 弹窗 + 告警音，5 秒冷却防轰炸，可静音，含记录面板与统计 |
+| **华为手环 9 接入** | Gadgetbridge + MQTT 真实设备数据流，心率变异性（HRV）血压估算；默认为模拟器模式 |
 | 中文字体自适应 | `msyh.ttc` / `simhei.ttf` 自动回退 |
 
-> 📄 详细算法优化文档见 [md/FALL_DETECTION_OPTIMIZATION.md](md/FALL_DETECTION_OPTIMIZATION.md)
+> 📄 详细文档（`md/` 目录）：[跌倒检测算法优化](md/FALL_DETECTION_OPTIMIZATION.md) · [智能告警系统](md/ALARM_SYSTEM_README.md) · [健康大屏](md/HEALTH_DASHBOARD_README.md) · [华为手环 9 接入指南](md/HUAWEI_BAND_GUIDE.md) · [飞书机器人配置指南](md/飞书机器人配置指南.md)
 
 ### 💬 语音 & AI（`deidao/dialogs.py`）
 | 能力 | 说明 |
 | --- | --- |
-| **情绪识别弹窗** | YOLOv11 face model 实时识别 `高兴/悲伤/愤怒/惊讶/中性/恐惧`，可据此调出 AI 诊断建议 |
+| **情绪识别弹窗** | MediaPipe 检测人脸 + ViT ONNX 实时识别 `高兴/悲伤/愤怒/惊讶/中性/恐惧/厌恶`，可据此调出 AI 诊断建议 |
 | **AI 智能问答** | 打字 + 麦克风（Vosk 离线 / Google 在线）双输入 |
 | **Kimi 大模型** | 通过环境变量或 `config_kimi.txt` 注入 API Key，自动回退到本地规则模板 |
 | **pyttsx3 中文 TTS** | 一次性 init → 用 → 销毁（避免 SAPI5 engine 复用哑火）；逐句可中断，停止按钮 100~300ms 收声 |
@@ -41,8 +43,10 @@
 ### 🧰 工程工具
 | 能力 | 说明 |
 | --- | --- |
-| `tests/manual_diagnosis_smoke.py` | 离屏烟雾测试：弹 `EmotionDetectionDialog` 不弹真实窗口 |
-| `tests/stop_all_tts.py` | 紧急停止所有 `pyttsx3` 朗读（TTS 死锁兜底） |
+| `test/test_alarm_system.py` | 告警系统测试：级别区分 / 冷却机制 / 静音 / 统计 |
+| `test/test_device_adapter.py` | 设备适配器测试（模拟器 / 华为手环 MQTT） |
+| `test/test_health_dashboard.py` | 健康大屏独立测试 |
+| `test/test_emotion_pipeline.py` | 情绪识别管线测试 |
 | 模块化拆分 | `main.py / ui_layout.py / dialogs.py / detector.py / database.py` 单一职责 |
 
 ---
@@ -58,18 +62,18 @@ AI-Vision-Guardian/
 │   ├── detector.py               # YOLOv8+MediaPipe 检测线程（多特征融合算法）
 │   └── database.py               # MySQL 初始化
 ├── qingxu/                       # 情绪识别子模块
-│   ├── app.py                    # YOLOv11 face emotion 单机 demo
-│   └── best.onnx                 # 训练好的情绪识别权重（需自行放置）
+│   ├── emotion_pipeline.py       # MediaPipe 人脸检测 + ViT 七分类实时管线
+│   ├── pro_emotion/models/onnx/model.onnx # ViT 情绪权重
+│   └── app.py                    # YOLOv11 face emotion 对照 demo
 ├── md/                           # 项目文档
-│   ├── FALL_DETECTION_OPTIMIZATION.md  # 跌倒检测算法优化文档
-│   ├── ALARM_SYSTEM_README.md    # 告警系统说明
-│   ├── DEVICE_INTEGRATION_1.md   # 设备集成指南 1
-│   ├── DEVICE_INTEGRATION_2.md   # 设备集成指南 2
+│   ├── FALL_DETECTION_OPTIMIZATION.md  # 跌倒检测算法优化（v1.0→v6.0 演进）
+│   ├── ALARM_SYSTEM_README.md    # 智能告警系统说明
 │   ├── HEALTH_DASHBOARD_README.md # 健康大屏说明
-│   └── HUAWEI_BAND_GUIDE.md      # 华为手环对接指南
+│   ├── HUAWEI_BAND_GUIDE.md      # 华为手环 9 接入指南
+│   └── 飞书机器人配置指南.md      # 飞书告警推送配置
 ├── model/
 │   └── vosk-model-small-cn-0.22/ # Vosk 中文模型（首次使用需下载，见下文）
-├── tests/                        # 烟雾测试 & 工具
+├── test/                         # 功能测试（告警 / 设备适配 / 大屏 / 情绪管线）
 ├── video/                        # 示例视频（不入库）
 ├── result/                       # 告警片段（运行时生成）
 ├── yolov8n.pt                    # YOLOv8 Nano 权重（需放置）
@@ -90,7 +94,7 @@ AI-Vision-Guardian/
 │                                                                  │
 │  ┌─────────────┐  ┌──────────────┐  ┌─────────────┐             │
 │  │ 检测线程     │  │ 情绪识别弹窗  │  │ AI 智能问答   │             │
-│  │ (detector)  │  │ (YOLOv11)    │  │ (Vosk+SR)   │             │
+│  │ (detector)  │  │ (ViT+Face)   │  │ (Vosk+SR)   │             │
 │  │ YOLO+Pose   │  │              │  │ + Kimi LLM  │             │
 │  └─────┬───────┘  └──────┬───────┘  └──────┬──────┘             │
 │        │ 告警事件        │ 情绪           │ AI 回复               │
@@ -142,20 +146,21 @@ pip install -r requirements.txt
 | --- | --- | --- |
 | `yolov8n.pt` | [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics) | 项目根目录 |
 | `vosk-model-small-cn-0.22` | [Vosk Models](https://alphacephei.com/vosk/models) | `model/vosk-model-small-cn-0.22/` |
-| `best.onnx`（情绪识别） | 自训 / 教师模型导出 | `qingxu/best.onnx` |
+| `model.onnx`（情绪识别） | `trpakov/vit-face-expression` 导出 | `qingxu/pro_emotion/models/onnx/model.onnx` |
 | `msyh.ttc` 或 `simhei.ttf` | Windows 系统字体 / 自行放置 | 项目根目录 |
 
-> Ultralytics 缺权重时通常会自动下载；Vosk 与 YOLOv11 需手动放置。
+> Ultralytics 缺权重时通常会自动下载；Vosk 模型需手动放置。当前工作区的 ViT 权重已在上表位置；新克隆仓库需按上表恢复该文件。
 
 ### 3. 配置环境变量
 
 ```bash
 copy .env.example .env
-# 编辑 .env，填入 Kimi Key（可选；无 Key 自动回退本地模板）
-# KIMI_API_KEY=sk-...
+# 编辑 .env，按需填入（均可留空，自动回退默认行为）：
+#   KIMI_API_KEY=sk-...        # Kimi 大模型（无 Key 走本地规则模板）
+#   FEISHU_WEBHOOK=https://... # 飞书跌倒告警推送（配置步骤见「健康监测子系统」）
 ```
 
-也可以把 Key 放进 `deidao/config_kimi.txt`（一行一 key，无空格）。
+也可以把 Kimi Key 放进 `deidao/config_kimi.txt`（一行一 key，无空格）。
 
 ### 4. （可选）准备 MySQL
 
@@ -177,11 +182,8 @@ cd deidao && python main.py
 # 情绪识别独立 demo
 cd qingxu && python app.py
 
-# 离屏烟雾测试（无需摄像头）
-python tests/manual_diagnosis_smoke.py
-
-# TTS 紧急停止（万一朗读卡死）
-python tests/stop_all_tts.py
+# 功能测试（告警 / 设备适配 / 健康大屏 / 情绪管线）
+python -m pytest test/
 ```
 
 ---
@@ -201,12 +203,12 @@ python tests/stop_all_tts.py
 1. 用 `family` 登录
 2. 实时监测可用，但部分参数被锁定
 3. **飞书音视频通话**：一键调起飞书客户端
-4. **健康大屏**：心率/血氧/血压/步数/体温/电量
+4. **健康大屏**：心率/血氧/血压/步数/体温/电量 + 趋势图 + 告警记录（详见「健康监测子系统」）
 5. **历史片段**：可填写处理备注并标记"已处理"
 
 ### 情绪识别弹窗（任意角色可用）
 
-1. 启动后调用 YOLOv11 摄像头实时识别情绪
+1. 启动后调用 MediaPipe + ViT 摄像头实时识别情绪
 2. 稳定 ≥ 1.5 秒后点 **AI 智能诊断**
 3. 系统自动调 Kimi（无 Key 走本地模板）生成关怀建议
 4. 自动用 pyttsx3 中文 TTS 朗读（可在 `🔊 语音朗读建议` 复选框关闭）
@@ -220,6 +222,64 @@ python tests/stop_all_tts.py
 | 麦克风 | Vosk 离线（`model/vosk-model-small-cn-0.22/`） |
 
 回复**默认自动朗读**（`AI 回复自动语音播报` 复选框开启时），可点 `停止朗读` 立刻打断。
+
+---
+
+## 🩺 健康监测子系统
+
+> 📄 详细文档：[健康大屏](md/HEALTH_DASHBOARD_README.md) · [智能告警系统](md/ALARM_SYSTEM_README.md) · [华为手环 9 接入指南](md/HUAWEI_BAND_GUIDE.md) · [飞书机器人配置指南](md/飞书机器人配置指南.md)
+
+### 健康指标大屏
+
+从主界面顶部「健康大屏」按钮打开（或 `python test/test_health_dashboard.py` 独立测试）：
+
+- **实时指标**：心率 ❤️ / 血氧 🫁 / 血压 🩸 / 步数 👟 / 体温 🌡️ / 电量 🔋，QTimer 每 2 秒自动刷新；顶部显示设备连接状态与数据更新时间戳
+- **ECharts 趋势图**：点击任意指标卡片弹出，支持 24 小时 / 7 天 / 30 天切换，渐变面积图、异常区间高亮、阈值标记线（依赖 `PyQt6-WebEngine`，已包含在 requirements.txt；首次打开需联网加载 CDN）
+- **数据导出**：一键导出 UTF-8 编码的 CSV 健康报告，Excel 可直接打开
+- **数据来源**：默认由 `HealthDataSimulator` 模拟生成（正态分布随机波动，保留约 24 小时 / 43200 条历史）；接入真实设备见下文
+
+### 智能健康告警（AlarmManager）
+
+大屏内置两级告警，异常时红色高亮并播放 `alarm.mp3`：
+
+| 指标 | 警告 WARNING 🟡 | 危险 CRITICAL 🔴 |
+| --- | --- | --- |
+| 心率 | - | < 60 或 > 100 bpm |
+| 血氧 | < 95% | - |
+| 收缩压 | - | < 90 或 > 140 mmHg |
+| 体温 | - | > 37.5 ℃ |
+| 电量 | - | < 20% |
+
+- **危险级告警**自动弹出置顶告警弹窗（含时间 / 当前值 / 健康建议）
+- **告警记录面板**（大屏底部）：实时显示最近 10 条记录 + 总计/警告/危险统计 + 静音开关 + 一键清空；内存中最多保留 500 条
+- **冷却机制**：同类告警 5 秒内不重复触发，避免声音轰炸
+- 独立测试：`python -m pytest test/test_alarm_system.py`
+
+### 华为手环 9 真实设备接入（可选）
+
+默认运行在模拟器模式；接入真实手环的数据流架构：
+
+```
+华为手环 9 → 蓝牙 → 手机 Gadgetbridge（开源 App）→ MQTT Broker（Mosquitto）→ 本项目
+```
+
+1. Android 手机安装 [Gadgetbridge](https://gadgetbridge.org/)（免费开源），配对手环；心率/血氧/步数/体温/电量均可直采
+2. 电脑安装并启动 [Mosquitto](https://mosquitto.org/)（默认端口 1883）
+3. 在 Gadgetbridge 设置中启用 MQTT 推送，指向电脑 IP
+4. 修改 `deidao/device_config.json`：`mode` 由 `simulator` 改为 `huawei_band`，填入 MQTT 地址与用户档案（年龄 / 性别 / 静息心率）
+5. 按「Mosquitto → Gadgetbridge → 本项目」顺序启动，健康大屏右上角显示「华为手环 - 已连接」即接入成功
+
+**血压估算算法**：手环 9 不支持血压直测，系统基于心率变异性（HRV）估算——`收缩压 = 基础收缩压 + (当前心率 − 静息心率) × 0.5`（舒张压系数 0.2），基础值按年龄段与性别查表。⚠️ 估算值仅供参考，不能替代医疗设备测量。
+
+### 飞书机器人推送配置
+
+系统检测到跌倒后，自动向飞书群推送**交互卡片**（发生时间 / 录像存档文件名 / 系统状态）。配置步骤：
+
+1. 飞书创建群聊 → 群设置 → **群机器人** → 添加**自定义机器人**，复制生成的 Webhook 地址（注意保密，泄露后任何人都能向群里发消息）
+2. 写入项目根目录 `.env`：`FEISHU_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/<token>`
+3. 重启程序生效。配置读取优先级：`系统环境变量 > .env 文件 > 代码默认值`（由 `deidao/database.py` 统一注入）
+
+> 未配置 Webhook 时系统自动跳过推送并在日志提示，不影响其他功能；内置推送频率控制（`last_feishu_time`）防止短时间内重复推送。
 
 ---
 
@@ -261,7 +321,7 @@ python tests/stop_all_tts.py
 | 主程序启动即 "导入 PyQt6 失败" | `pip install --upgrade PyQt6` |
 | 第一次朗读 OK，第二次无声 | 已修复，确保拉到最新 `dialogs.py` |
 | AI 弹窗不朗读 | 看 `lbl_tts_status` 状态栏：显示 `TTS 不可用: ...` 则按错误处理 |
-| 点"停止朗读"按钮像没生效 | 已用 `startLoop+iterate`，延迟 100~300ms；如仍卡死 → `python tests/stop_all_tts.py` |
+| 点"停止朗读"按钮像没生效 | 已用 `startLoop+iterate`，延迟 100~300ms；如仍卡死，重启程序即可恢复 |
 | MySQL 连不上 | 检查 `localhost:3306` 服务，确认账号密码与 `.env` |
 | Vosk 识别没反应 | 确认 `model/vosk-model-small-cn-0.22/` 存在且为完整解压目录 |
 | Kimi 不回复 | 没 Key 自动回退本地规则模板；想看云端回复请配 `KIMI_API_KEY` |
@@ -274,6 +334,7 @@ python tests/stop_all_tts.py
 - **加权打分机制**：给不同特征分配权重，总分超过阈值才报警（当前使用共识机制）
 - **机器学习分类器**：收集大量数据训练 SVM/Random Forest，替代手工规则
 - **时序模型**：使用 LSTM/GRU 学习动作时间模式，更准确区分跌倒和日常活动
+- **告警增强**：微信/短信推送家属、告警阈值自定义、告警历史导出 CSV/PDF、告警趋势分析、更多告警级别
 - **硬件联动**：通过 MQTT / TCP 接入智能手环、毫米波雷达
 - **多摄像头 / 多人**：将检测逻辑并发化，扩展至 N 路视频
 - **云端数据库**：MySQL → 阿里云 / 腾讯云 RDS，支持跨地域家属查看
@@ -292,7 +353,7 @@ python tests/stop_all_tts.py
 3. 推送 (`git push origin feature/xxx`)
 4. 发起 Pull Request
 
-代码风格：PEP 8；关键模块（`dialogs.py` / `detector.py`）请跑 `pytest tests/`。
+代码风格：PEP 8；关键模块（`dialogs.py` / `detector.py`）请跑 `pytest test/`。
 
 ---
 

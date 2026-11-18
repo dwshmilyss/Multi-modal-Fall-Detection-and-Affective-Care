@@ -38,7 +38,7 @@ def _audio_rms(audio):
 SettingsDialog：系统高级参数设置（调节跌倒倾斜角阈值、声音开关、缓冲区秒数等）。 
  HistoryDialog：历史跌倒告警记录与亲情处理中心（支持左侧列表查看历史、右侧视频回放、填写家属处理意见并同步更新数据库状态）。  
  HealthDashboardDialog：专属老人健康指标可视化监控大屏（模拟心率、血氧、血压等体征，支持未来物联网硬件接入扩展）。
- EmotionDetectionDialog：基于 YOLOv11 的人脸情绪识别弹窗（左侧视频流 + 右侧当前情绪、置信度、各类占比与给老人的关怀建议占位）。
+ EmotionDetectionDialog：基于 MediaPipe 人脸检测与 ViT 分类的人脸情绪识别弹窗（左侧视频流 + 右侧当前情绪、置信度、各类占比与关怀建议）。
  AISmartDialog：智能问答弹窗，集成打字输入与系统麦克风语音识别（基于 speech_recognition + Vosk），为后续接入本地/云端大模型预留 answer_question() 接口。
 '''
 import os
@@ -1245,7 +1245,7 @@ def _build_advice_prompt(emotion_cn, dist=None):
 
 
 class EmotionDetectionDialog(QDialog):
-    """基于 YOLOv11 的人脸情绪识别弹窗。"""
+    """基于人脸检测与 ViT 分类的人脸情绪识别弹窗。"""
     _tts_finished_signal = pyqtSignal(int)
     _last_emotion_cn = None  # 跨实例共享，供 AI 对话读取视觉情绪
 
@@ -1287,7 +1287,7 @@ class EmotionDetectionDialog(QDialog):
         # ============ 左侧：视频流与控制 ============
         left_layout = QVBoxLayout()
 
-        header_lbl = QLabel(" 实时人脸情绪检测 (YOLOv11)")
+        header_lbl = QLabel(" 实时人脸情绪检测 (ViT 两阶段)")
         header_lbl.setStyleSheet("color: #38BDF8; font-size: 14px; font-weight: bold; border: none;")
         left_layout.addWidget(header_lbl)
 
@@ -1299,7 +1299,7 @@ class EmotionDetectionDialog(QDialog):
 
         ctrl_layout = QHBoxLayout()
 
-        self.btn_pick_model = QPushButton(" 选择模型 (best.onnx)")
+        self.btn_pick_model = QPushButton(" 选择模型 (ViT ONNX)")
         self.btn_pick_model.clicked.connect(self.pick_model)
         ctrl_layout.addWidget(self.btn_pick_model)
 
@@ -1434,13 +1434,13 @@ class EmotionDetectionDialog(QDialog):
 
         main_layout.addLayout(right_layout, stretch=4)
 
-        self._update_info("请选择情绪识别模型 (.onnx) 后启动检测。")
+        self._update_info("请选择 ViT 情绪模型 (.onnx) 后启动检测。")
 
     def _init_dist_rows(self, ordered=None):
         """初始化情绪分布行 (名称 + 进度条 + 百分比)。"""
         if ordered is None:
-            # 与 best.onnx 模型类别一致：Angry, Fearful, Happy, Neutral, Sad
-            ordered = ["高兴", "平静", "悲伤", "愤怒", "恐惧"]
+            # 与 trpakov/vit-face-expression ONNX 输出一致。
+            ordered = ["愤怒", "厌恶", "恐惧", "高兴", "平静", "悲伤", "惊讶"]
         from PyQt6.QtWidgets import QProgressBar
         self._dist_rows = {}
         self._dist_order = list(ordered)
@@ -1536,7 +1536,7 @@ class EmotionDetectionDialog(QDialog):
 
     def start_detection(self):
         if not self.model_path or not os.path.exists(self.model_path):
-            themed_warning(self, "模型未选择", "请先点击「选择模型」加载 best.onnx 模型文件。")
+            themed_warning(self, "模型未选择", "请先点击「选择模型」加载 ViT ONNX 模型文件。")
             return
         if self.thread is not None and self.thread.isRunning():
             return

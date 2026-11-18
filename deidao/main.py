@@ -321,8 +321,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         dialog.exec()
 
     def _resolve_emotion_model_path(self):
-        """自动寻找情绪识别模型 best.onnx 的位置。"""
+        """自动寻找两阶段 ViT 情绪模型，找不到时回退旧 YOLO 文件。"""
         candidates = [
+            os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..", "qingxu", "pro_emotion", "models", "onnx", "model.onnx",
+            ),
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "qingxu", "best.onnx"),
             os.path.join(os.getcwd(), "qingxu", "best.onnx"),
             os.path.join(os.getcwd(), "best.onnx"),

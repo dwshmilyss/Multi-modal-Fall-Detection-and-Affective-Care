@@ -696,6 +696,24 @@ class EmotionDetector:
 
 # ============== 命令行参数解析 ==============
 
+def _resolve_model_path(config, cli_model):
+    """Resolve the legacy YOLO model, preferring an explicit CLI path."""
+    if cli_model:
+        return Path(cli_model)
+
+    module_dir = Path(__file__).resolve().parent
+    configured = str(config.get("model", "best.onnx"))
+    configured_path = Path(configured)
+    candidates = [
+        configured_path if configured_path.is_absolute() else module_dir / configured_path,
+        module_dir / "best.onnx",
+        module_dir / "best_yolo11s.onnx",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[0]
+
 def parse_args():
     parser = argparse.ArgumentParser(description="面部情绪实时检测 - 功能增强版")
     parser.add_argument(
@@ -706,8 +724,8 @@ def parse_args():
     )
     parser.add_argument(
         "--model",
-        default="best.onnx",
-        help="模型文件路径 (默认: best.onnx)",
+        default=None,
+        help="模型文件路径 (默认: 自动选择 best.onnx / best_yolo11s.onnx)",
     )
     parser.add_argument(
         "--imgsz",
@@ -780,7 +798,7 @@ def main():
         config = load_config(args.config)
     
     # 合并配置（命令行参数 > 配置文件 > 默认值）
-    model_path = args.model if args.model != "best.onnx" else config.get('model', 'best.onnx')
+    model_path = _resolve_model_path(config, args.model)
     imgsz = args.imgsz if args.imgsz != 640 else config.get('imgsz', 640)
     conf = args.conf if args.conf != 0.5 else config.get('conf', 0.5)
     save_dir = args.save_dir if args.save_dir != "output" else config.get('save_dir', 'output')

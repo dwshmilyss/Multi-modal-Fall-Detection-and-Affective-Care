@@ -1,6 +1,6 @@
-# 情绪识别子模块（YOLOv11 Face Emotion）
+# 情绪识别子模块（Two-stage Face Emotion）
 
-> **子模块**：本目录为 YOLOv11 人脸情绪识别独立 demo（`app.py`），是根项目 [AI-Vision-Guardian](../README.md) 情绪识别弹窗的后端训练参考。
+> **子模块**：本目录为主项目 [AI-Vision-Guardian](../README.md) 提供实时情绪识别管线。主界面默认使用 `emotion_pipeline.py` 的两阶段方案；`app.py` 保留为 YOLOv11 对照 demo。
 >
 > 完整项目文档（系统架构、快速开始、TTS 工程要点等）请查阅根目录 [README.md](../README.md)。
 
@@ -16,8 +16,10 @@
 ## Features
 
 - Real-time face emotion detection.
-- Custom-trained YOLOv11 model for improved accuracy.
-- Supports detection of five emotion classes.
+- MediaPipe locates the primary face, then a ViT ONNX classifier recognizes seven expressions.
+- Probability smoothing with hysteresis reduces frame-to-frame label jumping.
+- Missing faces clear stale output instead of continuing to display the last emotion.
+- Legacy `app.py` and YOLO weights remain available for side-by-side comparison.
 
 ## Installation
 
@@ -35,7 +37,33 @@ Make sure you have the following dependencies installed:
 - OpenCV
 - Ultralytics YOLO
 
-## Usage
+## Realtime Pipeline
+
+The popup in `deidao` resolves and loads this model by default:
+
+```text
+qingxu/pro_emotion/models/onnx/model.onnx
+```
+
+The pipeline converts each camera frame to RGB, detects faces with MediaPipe, crops the largest usable face with an 18% margin, resizes it to 224x224, and runs the ViT classifier. Supported classes are:
+
+```text
+angry, disgust, fear, happy, neutral, sad, surprise
+```
+
+To use the shared recognizer directly:
+
+```python
+from qingxu.emotion_pipeline import ViTFaceEmotionRecognizer
+
+with ViTFaceEmotionRecognizer() as recognizer:
+    result = recognizer.process(frame)
+    print(result.emotion_en, result.confidence, result.probabilities)
+```
+
+The classifier runs on CUDA when ONNX Runtime can load its CUDA provider, and automatically falls back to CPU. On CPU-only machines, expect lower inference frequency; the popup continues rendering camera frames between inferences.
+
+## Legacy YOLO Usage
 
 To run the model for face emotion detection, use the following script:
 
@@ -54,14 +82,10 @@ while True:
         print("Failed to grab frame.")
         break  
 
-    # Convert the frame to grayscale
-    gray_image = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    
-    # Convert grayscale to 3-channel image
-    gray_image_3d = cv2.merge([gray_image, gray_image, gray_image]) 
-    
+    # Keep the color frame; the YOLO training pipeline expects color input.
+
     # Perform inference
-    results = model(gray_image_3d)
+    results = model(frame)
     result = results[0]
 
     # Plot results
@@ -80,6 +104,8 @@ while True:
 cap.release()
 cv2.destroyAllWindows()
 ```
+
+When `best.onnx` is absent, `app.py` automatically tries `best_yolo11s.onnx`; pass `--model <path>` to force another YOLO file.
 
 ## Visualization
 
