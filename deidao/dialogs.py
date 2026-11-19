@@ -53,11 +53,14 @@ import logging
 import pymysql
 import cv2
 import numpy as np
-from database import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+try:
+    from .database import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+except ImportError:
+    from database import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 
 # 设备数据适配器（支持模拟/MQTT/TCP 三种模式）
 try:
-    from device_adapter import (
+    from .device_adapter import (
         DeviceAdapter, HealthData, create_adapter, load_config,
         SimulatorAdapter, MQTTAdapter, TCPAdapter
     )
@@ -77,7 +80,10 @@ except ImportError:
     HAS_WEBENGINE = False
 
 # 导入主题系统
-from themes import apply_theme_to_dialog, get_current_theme, themed_info, themed_warning, themed_critical, themed_question
+try:
+    from .themes import apply_theme_to_dialog, get_current_theme, themed_info, themed_warning, themed_critical, themed_question
+except ImportError:
+    from themes import apply_theme_to_dialog, get_current_theme, themed_info, themed_warning, themed_critical, themed_question
 
 # 日志记录器
 logger = logging.getLogger(__name__)

@@ -46,8 +46,15 @@ from PIL import Image, ImageDraw, ImageFont
 import pygame 
 import pymysql
 import threading
-from database import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+try:
+    from .database import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+except ImportError:
+    from database import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 from PyQt6.QtCore import QThread, pyqtSignal, QDateTime
+try:
+    from .fall_engine import FallDetectionEngine, SimplePersonTracker
+except ImportError:
+    from fall_engine import FallDetectionEngine, SimplePersonTracker
 
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
@@ -81,7 +88,7 @@ def aci_hesapla(omuz_merkezi, kalca_merkezi):
     aci = math.atan2(dy, dx)
     return abs(90 - np.degrees(aci))
 
-class DetectionThread(QThread):
+class LegacyDetectionThread(QThread):
     change_pixmap_signal = pyqtSignal(np.ndarray, str, int, bool)
     log_signal = pyqtSignal(str)
 
@@ -242,7 +249,7 @@ class DetectionThread(QThread):
         dusme_sayaci = 0
         dusme_video_sayisi = 0
         dusme_sonrasi_kareler = 0
-        dusme_sonrasi_bekleme_suresi = 10
+        dusme_sonrasi_bekleme_suresi = int(max(1, fps * 5))
         dusme_video_yazici = None
         self.current_async_writer = None
         
@@ -551,6 +558,232 @@ class DetectionThread(QThread):
         if dusme_video_yazici is not None:
             dusme_video_yazici.release()
         self.log_signal.emit(" 视频流已关闭。")
+
+
+# ==================== 时序状态机实时检测线程 ====================
+class TemporalDetectionThread(LegacyDetectionThread):
+    """Default camera thread backed by per-person temporal fall engines."""
+
+    def _load_yolo_model(self):
+        self.log_signal.emit("正在加载 YOLOv8 & MediaPipe 模型（时序状态机检测）...")
+        try:
+            if torch.cuda.is_available():
+                self._device = "cuda:0"
+                self.log_signal.emit(f" YOLOv8 跌倒检测已启用 GPU: {torch.cuda.get_device_name(0)}")
+            else:
+                self._device = "cpu"
+                self.log_signal.emit(" YOLOv8 跌倒检测回退到 CPU")
+            model = YOLO("model/yolov8n.pt")
+            if self._device != "cpu":
+                model.to(self._device)
+            return model
+        except Exception as exc:
+            self.log_signal.emit(f" YOLO 模型加载失败: {exc}")
+            return None
+
+    def run(self):
+        model = self._load_yolo_model()
+        if model is None:
+            return
+
+        cap_source = int(self.source) if str(self.source).isdigit() else self.source
+        cap = cv2.VideoCapture(cap_source)
+        if not cap.isOpened():
+            self.log_signal.emit(f" 错误：无法打开视频源 [{self.source}]！")
+            return
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0 or math.isnan(fps):
+            fps = 30.0
+        genislik = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        yukseklik = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        is_camera = str(self.source).isdigit()
+
+        dusme_video_sayisi = 0
+        dusme_sonrasi_kareler = 0
+        dusme_sonrasi_bekleme_suresi = int(max(1, fps * 5))
+        dusme_video_yazici = None
+        self.current_async_writer = None
+        last_alarm_timestamp = 0.0
+        cooldown_seconds = 1.0
+
+        buffer_sec = self.settings.get("buffer_seconds", 10)
+        kare_tamponu = deque(maxlen=int(buffer_sec * fps))
+        mp_cizim = mp.solutions.drawing_utils
+        mp_poz = mp.solutions.pose
+        person_tracker = SimplePersonTracker()
+        fall_engines = {}
+        video_timestamp = 0.0
+
+        with mp_poz.Pose(
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+            model_complexity=1,
+        ) as poz:
+            while self.running and cap.isOpened():
+                ret, kare = cap.read()
+                if not ret:
+                    if is_camera:
+                        self.log_signal.emit(" 摄像头读取中断或无数据。")
+                        break
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    video_timestamp = 0.0
+                    continue
+
+                if is_camera:
+                    frame_timestamp = time.perf_counter()
+                else:
+                    frame_timestamp = video_timestamp
+                    video_timestamp += 1.0 / fps
+
+                current_durus = "未检测到人员"
+                is_falling = False
+                any_alarm_active = False
+                alarm_payload = None
+                person_boxes = []
+
+                sonuclar = model(kare, device=self._device, verbose=False)
+                for sonuc in sonuclar:
+                    for bbox, sinif in zip(sonuc.boxes.xyxy, sonuc.boxes.cls):
+                        if int(sinif) != 0:
+                            continue
+                        x1, y1, x2, y2 = map(int, bbox)
+                        x1, y1 = max(0, x1), max(0, y1)
+                        x2, y2 = min(genislik, x2), min(yukseklik, y2)
+                        if x2 - x1 >= 10 and y2 - y1 >= 10:
+                            person_boxes.append((x1, y1, x2, y2))
+
+                track_ids = person_tracker.assign(person_boxes, frame_timestamp)
+                active_tracker_ids = person_tracker.active_ids()
+
+                for (x1, y1, x2, y2), track_id in zip(person_boxes, track_ids):
+                    engine = fall_engines.setdefault(track_id, FallDetectionEngine())
+                    kisi_bbox = kare[y1:y2, x1:x2].copy()
+                    pose_result = poz.process(cv2.cvtColor(kisi_bbox, cv2.COLOR_BGR2RGB))
+
+                    if not pose_result.pose_landmarks:
+                        result = engine.process({"timestamp": frame_timestamp, "visibility": 0.0})
+                    else:
+                        mp_cizim.draw_landmarks(
+                            kisi_bbox,
+                            pose_result.pose_landmarks,
+                            mp_poz.POSE_CONNECTIONS,
+                        )
+                        landmarks = pose_result.pose_landmarks.landmark
+                        h_box, w_box, _ = kisi_bbox.shape
+
+                        shoulders = [
+                            (landmarks[mp_poz.PoseLandmark.LEFT_SHOULDER.value].x * w_box,
+                             landmarks[mp_poz.PoseLandmark.LEFT_SHOULDER.value].y * h_box),
+                            (landmarks[mp_poz.PoseLandmark.RIGHT_SHOULDER.value].x * w_box,
+                             landmarks[mp_poz.PoseLandmark.RIGHT_SHOULDER.value].y * h_box),
+                        ]
+                        hips = [
+                            (landmarks[mp_poz.PoseLandmark.LEFT_HIP.value].x * w_box,
+                             landmarks[mp_poz.PoseLandmark.LEFT_HIP.value].y * h_box),
+                            (landmarks[mp_poz.PoseLandmark.RIGHT_HIP.value].x * w_box,
+                             landmarks[mp_poz.PoseLandmark.RIGHT_HIP.value].y * h_box),
+                        ]
+                        shoulder_center = (
+                            (shoulders[0][0] + shoulders[1][0]) / 2.0,
+                            (shoulders[0][1] + shoulders[1][1]) / 2.0,
+                        )
+                        hip_center = (
+                            (hips[0][0] + hips[1][0]) / 2.0,
+                            (hips[0][1] + hips[1][1]) / 2.0,
+                        )
+                        key_indices = (
+                            mp_poz.PoseLandmark.NOSE.value,
+                            mp_poz.PoseLandmark.LEFT_SHOULDER.value,
+                            mp_poz.PoseLandmark.RIGHT_SHOULDER.value,
+                            mp_poz.PoseLandmark.LEFT_HIP.value,
+                            mp_poz.PoseLandmark.RIGHT_HIP.value,
+                        )
+                        visibility = sum(landmarks[index].visibility for index in key_indices) / len(key_indices)
+                        observation = {
+                            "timestamp": frame_timestamp,
+                            "torso_angle": float(aci_hesapla(hip_center, shoulder_center)),
+                            "hip_y": float(y1 + hip_center[1]),
+                            "nose_y": float(y1 + landmarks[mp_poz.PoseLandmark.NOSE.value].y * h_box),
+                            "bbox": (float(x1), float(y1), float(x2), float(y2)),
+                            "visibility": float(visibility),
+                        }
+                        result = engine.process(observation)
+
+                    current_durus = result.label
+                    any_alarm_active = any_alarm_active or result.alarm_active
+                    if result.alarm_event and alarm_payload is None:
+                        alarm_payload = (track_id, result)
+
+                    kare[y1:y2, x1:x2] = kisi_bbox
+                    color = (0, 0, 255) if result.alarm_active else (0, 255, 0)
+                    cv2.rectangle(kare, (x1, y1), (x2, y2), color, 2)
+                    kare = cv2_add_chinese_text(
+                        kare,
+                        current_durus,
+                        (x1, max(y1 - 30, 10)),
+                        font_size=22,
+                        color=color,
+                    )
+
+                # A missing YOLO track is usually brief occlusion. Decay its
+                # candidate instead of immediately erasing all person history.
+                for track_id, engine in fall_engines.items():
+                    if track_id in active_tracker_ids:
+                        continue
+                    result = engine.process({"timestamp": frame_timestamp, "visibility": 0.0})
+                    any_alarm_active = any_alarm_active or result.alarm_active
+
+                is_falling = any_alarm_active
+
+                if alarm_payload is not None:
+                    track_id, result = alarm_payload
+                    current_time = time.time()
+                    if (
+                        current_time - last_alarm_timestamp > cooldown_seconds
+                        and dusme_video_yazici is None
+                        and self.current_async_writer is None
+                    ):
+                        last_alarm_timestamp = current_time
+                        dusme_video_sayisi += 1
+                        filename = (
+                            f'dusme_{QDateTime.currentDateTime().toString("yyyyMMdd_hhmmss")}_'
+                            f'{dusme_video_sayisi}.mp4'
+                        )
+                        alarm_thread = threading.Thread(
+                            target=self.handle_alarm_async,
+                            args=(filename, deque(kare_tamponu), fps, genislik, yukseklik),
+                        )
+                        alarm_thread.daemon = True
+                        alarm_thread.start()
+                        self.log_signal.emit(
+                            f"[状态机] 确认跌倒! 人员ID={track_id} "
+                            f"置信分={result.confidence:.1f} "
+                            f"特征={','.join(result.features) or '无'}"
+                        )
+
+                if self.current_async_writer is not None:
+                    dusme_video_yazici = self.current_async_writer
+                    self.current_async_writer = None
+                if dusme_video_yazici is not None:
+                    dusme_video_yazici.write(kare)
+                    dusme_sonrasi_kareler += 1
+                if dusme_sonrasi_kareler > dusme_sonrasi_bekleme_suresi and dusme_video_yazici is not None:
+                    dusme_video_yazici.release()
+                    dusme_video_yazici = None
+                    dusme_sonrasi_kareler = 0
+                    self.log_signal.emit(" 跌倒事件视频片段记录完毕。")
+
+                kare_tamponu.append(kare.copy())
+                self.change_pixmap_signal.emit(kare, current_durus, dusme_video_sayisi, is_falling)
+
+        cap.release()
+        if dusme_video_yazici is not None:
+            dusme_video_yazici.release()
+        self.log_signal.emit(" 视频流已关闭。")
+
+
+DetectionThread = TemporalDetectionThread
 
 
 # ==================== 情绪检测线程（MediaPipe + ViT ONNX） ====================
