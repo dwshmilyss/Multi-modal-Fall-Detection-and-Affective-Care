@@ -71,3 +71,8 @@ config_kimi.txt
 # ============== 模型 ===================
 model
 deidao/model/yolov8n.pt
+
+test_videos/evaluation/
+output/evaluation/
+urfall-cam0-falls.csv
+urfall-cam0-adls.csv
