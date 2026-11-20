@@ -37,7 +37,7 @@ All production code follows red-green-refactor: each task adds a failing test, c
 - Create: `test/test_fall_metrics.py`
 - Modify: `.gitignore`
 
-- [ ] **Step 1: Write failing annotation and manifest tests**
+- [x] **Step 1: Write failing annotation and manifest tests**
 
 Create tests that cover:
 
@@ -70,7 +70,7 @@ Expected manifest entry:
 }
 ```
 
-- [ ] **Step 2: Confirm Task 1 RED**
+- [x] **Step 2: Confirm Task 1 RED**
 
 Run:
 
@@ -80,7 +80,7 @@ Run:
 
 Expected failure: `ModuleNotFoundError: deidao.fall_metrics`.
 
-- [ ] **Step 3: Implement annotation and manifest parsing**
+- [x] **Step 3: Implement annotation and manifest parsing**
 
 Create these public APIs:
 
@@ -102,11 +102,11 @@ Implementation details:
 - Any ADL containing official label `0` or `1` uses `activity_group="low_posture_adl"`.
 - Include dataset metadata: `dataset="URFD"`, `camera="cam0"`, FPS, and official source URL.
 
-- [ ] **Step 4: Confirm Task 1 manifest tests pass**
+- [x] **Step 4: Confirm Task 1 manifest tests pass**
 
 Run the focused command again. Expected: all annotation and manifest tests pass.
 
-- [ ] **Step 5: Write failing result, metrics, and report tests**
+- [x] **Step 5: Write failing result, metrics, and report tests**
 
 Define expected result scenarios:
 
@@ -140,11 +140,11 @@ Also test that Markdown contains:
 - 全量 ADL、基础 ADL、低姿态 ADL explanations
 - explicit statement that `late_detected` is not counted as recall.
 
-- [ ] **Step 6: Confirm metrics/report RED**
+- [x] **Step 6: Confirm metrics/report RED**
 
 Run the focused test command. Expected failure: missing `VideoEvaluationResult`, `FallEvaluationReport`, `summarize_results`, or `render_markdown_report`.
 
-- [ ] **Step 7: Implement result model, classification, metrics, and report**
+- [x] **Step 7: Implement result model, classification, metrics, and report**
 
 Create the frozen dataclasses `VideoEvaluationResult` and `FallEvaluationReport` with exactly the fields listed in the tests. `VideoEvaluationResult` contains path, label, expected-alarm flag, alarm-time tuple, action start, maximum delay, activity group, frame count, FPS, detected-person-frame count, processing FPS, feature tuple, and optional read error. `FallEvaluationReport` contains dataset, camera, evaluated count, read errors, overall metrics, and group metrics.
 
@@ -175,7 +175,7 @@ Groups:
 
 Each group reports evaluated count, TP, late, FN, FP, TN, recall, precision, missed-alarm rate, false-alarm rate, and average timely alarm latency when available.
 
-- [ ] **Step 8: Confirm Task 1 GREEN**
+- [x] **Step 8: Confirm Task 1 GREEN**
 
 Run:
 
@@ -185,7 +185,7 @@ Run:
 
 Expected: all Task 1 tests pass.
 
-- [ ] **Step 9: Ignore generated data**
+- [x] **Step 9: Ignore generated data**
 
 Append to `.gitignore`:
 
@@ -196,7 +196,7 @@ urfall-cam0-falls.csv
 urfall-cam0-adls.csv
 ```
 
-- [ ] **Step 10: Commit Task 1**
+- [x] **Step 10: Commit Task 1**
 
 ```powershell
 git add deidao/fall_metrics.py test/test_fall_metrics.py .gitignore
