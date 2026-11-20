@@ -1,46 +1,38 @@
-# Competition Hardening Design
+# 参赛强化设计
 
-## Goal
+## 目标
 
-Upgrade the competition project from a feature-rich detection system into a
-demonstrable, evidence-backed, privacy-aware care system. The work covers four
-required tracks:
+将参赛项目从“功能丰富的检测系统”升级为“可演示、有证据支撑、尊重隐私的看护系统”。本次工作覆盖四个必做方向：
 
-1. Algorithm evaluation evidence center.
-2. One-click competition demo reliability kit.
-3. Multimodal risk fusion and active emergency closure.
-4. Privacy, security, and trustworthiness.
+1. 算法评测证据中心。
+2. 一键比赛演示可靠性套件。
+3. 多模态风险融合与主动应急闭环。
+4. 隐私、安全与可信度强化。
 
-The competition story becomes: measurable detection, reliable offline-capable
-demonstration, active response after an alarm, and responsible handling of
-elderly-care data.
+项目参赛叙事随之升级为：检测效果可量化、现场演示可离线运行、告警之后能主动响应，并负责任地处理养老看护数据。
 
-## Current Baseline
+## 当前基线
 
-The repository already contains:
+仓库当前已经具备：
 
-- A temporal, per-person fall state machine in `deidao/fall_engine.py`.
-- Regression coverage for fast falls, intentional lying, sitting, frame-rate
-  differences, missing pose, and person tracking.
-- A real Huawei Band 9 path through Gadgetbridge SQLite and MQTT, with an
-  explicit simulator fallback for demos.
-- A two-stage emotion pipeline and a reproducible emotion-model benchmark.
-- Feishu push, health dashboard, AI chat, local/cloud LLM switching, and TTS.
-- A 14-page competition deck targeting the 2026 Henan vocational competition.
+- `deidao/fall_engine.py` 中按人员隔离的时序跌倒状态机。
+- 覆盖快速跌倒、主动躺下、坐姿、不同帧率、关键点缺失和人员跟踪的回归测试。
+- 通过 Gadgetbridge SQLite 与 MQTT 接入华为手环 9 真实数据的链路，并为演示提供明确的模拟兜底。
+- 两阶段情绪识别管线，以及可复现的情绪模型基准评测。
+- 飞书推送、健康大屏、AI 问答、本地/云端大模型切换和 TTS。
+- 面向 2026 年河南省职业院校技能大赛的 14 页参赛 PPT。
 
-The main gaps are quantitative reporting, failure-proof live demonstration, post-alarm
-response closure, and privacy/security hardening.
+当前主要短板是：缺少量化报告、现场演示缺少故障保险、告警后缺少响应闭环，以及隐私和安全仍需强化。
 
-## Scope
+## 范围
 
-### In Scope
+### 范围内
 
-#### 1. Evaluation Evidence Center
+#### 1. 评测证据中心
 
-Add an offline evaluation tool that runs labeled videos through the same fall
-decision logic used by the application and produces judge-ready reports.
+新增离线评测工具，让带标签视频通过与应用相同的跌倒判定逻辑，并输出面向评委的报告。
 
-Dataset layout:
+数据集目录结构：
 
 ```text
 test_videos/evaluation/
@@ -51,127 +43,113 @@ test_videos/evaluation/
   walking/
 ```
 
-A JSON manifest may supplement filenames when exact scene labels, action start
-times, or expected alarm windows differ from the default.
+当场景标签、动作开始时间或预期告警窗口与默认规则不同时，可以使用 JSON manifest 补充文件名之外的信息。
 
-The evaluator reports:
+评测器输出：
 
-- Per-scene true-positive, false-positive, and false-negative counts.
-- Recall, precision, false-alarm rate, and missed-alarm rate.
-- Average alarm latency from expected action start.
-- Alarm count and triggered feature reasons per video.
-- Processing FPS and optional CPU/GPU device information.
-- Markdown and JSON outputs under `output/evaluation/fall/`.
+- 每个场景的真阳性、假阳性和假阴性数量。
+- 召回率、精确率、误报率和漏报率。
+- 从预期动作开始到告警的平均延迟。
+- 每个视频的告警次数和触发特征原因。
+- 处理 FPS，以及可选的 CPU/GPU 设备信息。
+- 写入 `output/evaluation/fall/` 的 Markdown 与 JSON 结果。
 
-The emotion benchmark remains in `qingxu`. A small report aggregator combines
-fall and emotion results into one Markdown evidence file for the deck.
+情绪基准评测继续保留在 `qingxu`。新增一个轻量报告聚合器，把跌倒与情绪结果合并为一份可直接放入 PPT 的 Markdown 证据文件。
 
-#### 2. Demo Reliability Kit
+#### 2. 演示可靠性套件
 
-Add a preflight and demo launcher. It checks:
+新增预检与演示启动工具。检查内容包括：
 
-- Required Python packages and versions.
-- YOLO, MediaPipe, ViT/HSEmotion, and Vosk artifacts.
-- Camera readability.
-- MySQL availability.
-- MQTT/Broker reachability.
-- Audio output, TTS, and alarm sound.
-- Kimi/Ollama configuration.
-- Feishu webhook configuration.
-- Backup video presence.
+- 必需 Python 包及版本。
+- YOLO、MediaPipe、ViT/HSEmotion 和 Vosk 模型文件。
+- 摄像头是否可读。
+- MySQL 是否可用。
+- MQTT/Broker 是否可达。
+- 音频输出、TTS 和告警音。
+- Kimi/Ollama 配置。
+- 飞书 Webhook 配置。
+- 备用视频是否存在。
 
-Profiles:
+演示配置：
 
-- `standard`: full system with all configured services.
-- `offline`: local video, local models, no cloud LLM or external webhook.
-- `no_band`: simulator-backed health dashboard and normal vision detection.
+- `standard`：使用已配置服务的完整系统。
+- `offline`：本地视频、本地模型，不使用云端 LLM 或外部 webhook。
+- `no_band`：健康大屏使用模拟数据，同时保留正常视觉检测。
 
-The tool reports blocking issues, degraded capabilities, and the selected demo
-path. It never labels simulated health values as real device data.
+该工具输出阻断问题、可降级能力和所选演示路径。它绝不把模拟健康数据标称为真实设备数据。
 
-#### 3. Risk Engine and Emergency Closure
+#### 3. 风险引擎与应急闭环
 
-Add a Qt-free `RiskEngine` that converts independent signals into one care
-decision.
+新增不依赖 Qt 的 `RiskEngine`，把多个独立信号转换为同一个看护决策。
 
-Inputs:
+输入：
 
-- Fall decision and confidence from the temporal fall engine.
-- Heart rate, SpO2, blood-pressure estimate, temperature, and battery from the
-  health adapter.
-- Current visual emotion and recent emotion stability.
-- Time context such as night hours.
-- User response state.
+- 来自时序跌倒引擎的跌倒判定和置信度。
+- 来自健康适配器的心率、血氧、血压估算、体温和电量。
+- 当前视觉情绪以及近期情绪稳定性。
+- 时间上下文，例如夜间时段。
+- 用户响应状态。
 
-Outputs:
+输出：
 
-- Level: `LOW`, `WATCH`, `HIGH`, or `EMERGENCY`.
-- Reasons: machine-readable feature names plus Chinese display text.
-- Recommended action.
-- Response deadline for active escalation.
+- 等级：`LOW`、`WATCH`、`HIGH` 或 `EMERGENCY`。
+- 原因：机器可读特征名，以及中文展示文案。
+- 建议动作。
+- 主动升级所需的响应截止时间。
 
-The engine must never suppress an already confirmed fall merely to reduce
-false alarms. Its role is tiering and escalation; a confirmed fall remains at
-least `HIGH`.
+风险引擎绝不能为了降低误报而压制已确认的跌倒。它的职责是分级和升级；已确认跌倒的等级至少为 `HIGH`。
 
-Emergency flow:
+应急流程：
 
-1. A `HIGH` or `EMERGENCY` event triggers local voice inquiry.
-2. The UI exposes an immediate “我没事” response.
-3. If Vosk is available, a small affirmative-response phrase list is accepted.
-4. If no response arrives before the deadline, the event escalates.
-5. Escalation sends the existing Feishu notification with clear response
-   instructions.
-6. Family or admin marks the event as confirmed, false alarm, waiting for
-   help, or processed.
-7. Every state transition is persisted.
+1. `HIGH` 或 `EMERGENCY` 事件触发本地语音问询。
+2. 界面提供立即可点的“我没事”响应按钮。
+3. 如果 Vosk 可用，则接受一个小规模肯定回复短语列表。
+4. 若在截止时间前没有响应，事件自动升级。
+5. 升级时沿用现有飞书通知，并附带明确的处理指引。
+6. 家属或管理员将事件标记为已确认、误报、等待救援或已处理。
+7. 所有状态迁移均持久化保存。
 
-#### 4. Privacy and Security
+#### 4. 隐私与安全
 
-Authentication:
+身份认证：
 
-- Replace plaintext/default database passwords with a salted PBKDF2 hash.
-- Migrate existing local accounts only when their current password verifies.
-- Keep a temporary migration-safe login path clearly marked in code and remove
-  it after local databases are upgraded.
+- 用带盐 PBKDF2 哈希替代明文/默认数据库密码。
+- 仅当现有本地账号的当前密码能通过验证时才迁移该账号。
+- 保留一个临时且在代码中明确标记的迁移安全登录路径；本地数据库完成升级后移除该路径。
 
-Audit and storage:
+审计与存储：
 
-- Add an audit log for login, failed login, settings changes, exports, alarm
-  processing, and privacy-mode changes.
-- Add an `emergency_events` table for the complete escalation timeline.
-- Add configurable retention for videos and exported health data.
-- Add a one-click cleanup action for expired artifacts.
+- 为登录、登录失败、设置修改、数据导出、告警处理和隐私模式修改增加审计日志。
+- 新增 `emergency_events` 表，保存完整升级时间线。
+- 为视频和导出的健康数据增加可配置保留期。
+- 提供一键清理过期产物功能。
 
-Video privacy:
+视频隐私：
 
-- Add privacy modes: `off`, `face_blur`, `body_blur`, and `skeleton`.
-- `face_blur` is the default mode for newly saved alarm recordings.
-- Alarm videos honor the mode before writing to `result/`.
-- The UI states the active privacy mode.
-- Tests verify that face regions cannot be reconstructed from the default
-  blurred output and that transform failures prevent an unsafe save when a
-  privacy mode other than `off` is selected.
+- 增加隐私模式：`off`、`face_blur`、`body_blur` 和 `skeleton`。
+- 新保存的告警录像默认使用 `face_blur`。
+- 告警视频写入 `result/` 前必须应用所选隐私模式。
+- UI 明确显示当前隐私模式。
+- 测试验证默认模糊输出中的人脸区域不可还原；当选择非 `off` 隐私模式时，转换失败必须阻止不安全保存。
 
-Secrets:
+密钥：
 
-- API keys, webhooks, and database credentials are read from environment
-  variables or the existing local `.env` mechanism.
-- No new secret is written to a tracked configuration file.
+- API key、webhook 和数据库凭据从环境变量或现有本地 `.env` 机制读取。
+- 不把新的密钥写入受版本控制的配置文件。
 
-### Out of Scope
+### 范围外
 
-- WebRTC automatic outbound calls.
-- Millimeter-wave radar integration.
-- LSTM/GRU fall classification.
-- Cloud RDS migration.
-- Multi-camera concurrency.
-- Medical diagnosis or certified blood-pressure claims.
-- Daily/weekly caregiver reports; this may be added later only if time remains.
+- WebRTC 自动外呼。
+- 毫米波雷达接入。
+- LSTM/GRU 跌倒分类。
+- 云端 RDS 迁移。
+- 多摄像头并发。
+- 医疗诊断或认证血压结论。
+- 每日/每周看护报告；仅当后续仍有余力时再考虑。
 
-## Architecture
+## 架构
 
-### New Components
+### 新组件
 
 ```text
 tools/evaluate_fall_videos.py
@@ -182,110 +160,98 @@ deidao/emergency_controller.py
 deidao/privacy.py
 ```
 
-`risk_engine.py`, `emergency_controller.py`, and privacy transforms stay free
-of Qt imports so their state transitions can be tested without a window.
+`risk_engine.py`、`emergency_controller.py` 和隐私转换逻辑均不导入 Qt，使状态迁移可以在无窗口环境下测试。
 
-### Existing Components Extended
+### 扩展的现有组件
 
-- `deidao/detector.py`: emits structured fall events and privacy-safe video
-  frames.
-- `deidao/dialogs.py`: renders risk level, response controls, privacy mode,
-  and preflight status.
-- `deidao/database.py`: owns schema migration and audit/emergency persistence.
-- `deidao/device_adapter.py`: continues to expose real and simulated data
-  without mixing their provenance.
-- `tools/gadgetbridge_mqtt_bridge.py`: remains the real-device bridge.
+- `deidao/detector.py`：输出结构化跌倒事件，并生成符合隐私设置的视频帧。
+- `deidao/dialogs.py`：渲染风险等级、响应控件、隐私模式和预检状态。
+- `deidao/database.py`：负责 schema 迁移、审计日志与应急事件持久化。
+- `deidao/device_adapter.py`：继续区分真实数据与模拟数据，不混淆来源。
+- `tools/gadgetbridge_mqtt_bridge.py`：继续作为真实设备桥接器。
 
-### Data Flow
+### 数据流
 
 ```text
-Camera/video
-  -> temporal fall engine
+摄像头/视频
+  -> 时序跌倒引擎
   -> RiskEngine
-       <- health adapter
-       <- emotion pipeline
-       <- time/response context
+       <- 健康适配器
+       <- 情绪管线
+       <- 时间/响应上下文
   -> EmergencyController
-       -> local voice inquiry
-       -> response deadline / family action
-       -> Feishu escalation
-       -> emergency_events and audit log
-  -> privacy-safe alarm recording
+       -> 本地语音问询
+       -> 响应截止时间 / 家属动作
+       -> 飞书升级
+       -> emergency_events 与审计日志
+  -> 符合隐私设置的告警录像
 ```
 
-Evaluation runs outside Qt:
+评测在 Qt 外运行：
 
 ```text
-labeled videos -> detector/fall engine -> event matcher
-               -> metrics -> JSON/Markdown evidence report
+带标签视频 -> 检测器/跌倒引擎 -> 事件匹配器
+           -> 指标计算 -> JSON/Markdown 证据报告
 ```
 
-## Error Handling
+## 错误处理
 
-- Evaluation reports unreadable videos and invalid labels instead of aborting
-  the whole run.
-- Preflight separates blocking failures from optional degraded capabilities.
-- Offline mode never invokes cloud LLM or external webhooks.
-- Speech recognition failure leaves the on-screen response button usable.
-- Feishu failure is logged but does not stop local recording or database
-  persistence.
-- MQTT and simulator fallback preserve existing provenance wording.
-- Privacy transform failure prevents saving an unsafe recording when a privacy
-  mode other than `off` is selected.
-- Database migration failure leaves the existing schema readable and reports a
-  clear startup error.
+- 评测器报告无法读取的视频和无效标签，不因单条样本中断整个评测。
+- 预检工具区分阻断性失败和可选降级能力。
+- 离线模式绝不调用云端 LLM 或外部 webhook。
+- 语音识别失败时，界面上的响应按钮仍可使用。
+- 飞书发送失败会记录日志，但不阻止本地录像或数据库持久化。
+- MQTT 与模拟兜底保留现有的数据来源提示。
+- 当选择非 `off` 的隐私模式时，隐私转换失败会阻止不安全录像保存。
+- 数据库迁移失败时保持现有 schema 可读，并给出清晰的启动错误。
 
-## Testing
+## 测试
 
-Add focused tests for:
+新增针对性测试：
 
-1. Fall metric calculation from synthetic event timelines.
-2. Report generation and malformed media handling.
-3. Preflight dependency/model/service decisions.
-4. Risk levels and machine-readable reasons.
-5. Confirmed fall cannot be downgraded below `HIGH`.
-6. Inquiry response cancels escalation.
-7. Missing response escalates exactly once.
-8. Family processing states and persistence transitions.
-9. Password hashing, migration, and failed login audit.
-10. Face/body blur and skeleton privacy transforms.
-11. Retention cleanup only deletes intended generated artifacts.
+1. 使用合成事件时间线验证跌倒指标计算。
+2. 验证报告生成和异常媒体处理。
+3. 验证预检工具对依赖、模型和服务的判断。
+4. 验证风险等级和机器可读原因。
+5. 验证已确认跌倒不能降级到 `HIGH` 以下。
+6. 验证问询响应会取消升级。
+7. 验证无响应时只升级一次。
+8. 验证家属处理状态和持久化状态迁移。
+9. 验证密码哈希、迁移和登录失败审计。
+10. 验证人脸/人体模糊与骨架隐私转换。
+11. 验证保留期清理只删除预期的生成产物。
 
-Existing tests in `test/` must continue to pass. The final verification command
-is the project's full pytest suite plus the newly added evaluator smoke test.
+`test/` 中现有测试必须继续通过。最终验证命令为项目完整 pytest 套件，加上新增评测器的 smoke test。
 
-## Competition Deliverables
+## 参赛交付物
 
-- One-command fall evaluation report.
-- Combined algorithm evidence page.
-- Preflight and demo profiles.
-- Reliable offline/no-band demo path.
-- Active emergency closure demo.
-- Privacy-aware recording and authentication.
-- Updated README and deck text with unified model names and non-medical
-  disclaimers.
+- 一条命令生成跌倒评测报告。
+- 合并后的算法证据页。
+- 预检工具与演示配置。
+- 可靠的离线/无手环演示路径。
+- 主动应急闭环演示。
+- 具备隐私保护录像与身份认证的系统。
+- 更新 README 与 PPT 文案，统一模型名称并保留非医疗声明。
 
-## Acceptance Criteria
+## 验收标准
 
-- The current full test suite passes after the work.
-- Fall evaluation produces JSON and Markdown reports with explicit sample
-  counts and metrics.
-- Offline and no-band profiles complete the core demo without cloud services.
-- A fall triggers inquiry, waits for response, escalates, and records the
-  family action.
-- User passwords are stored as salted hashes in new or migrated databases.
-- Audit rows capture security-relevant actions.
-- Alarm videos honor the selected privacy mode.
-- PPT model names match the implemented cloud/local providers.
-- Every headline metric in the deck can be traced to a generated report.
+- 当前完整测试套件在完成后通过。
+- 跌倒评测生成 JSON 与 Markdown 报告，并明确样本数量和指标。
+- 离线与无手环配置能在无云服务情况下完成核心演示。
+- 跌倒后能触发问询、等待响应、自动升级并记录家属处理动作。
+- 新建或迁移后的数据库以带盐哈希保存用户密码。
+- 审计记录覆盖安全相关动作。
+- 告警视频遵守所选隐私模式。
+- PPT 中的模型名称与实际云端/本地服务一致。
+- PPT 中每个核心指标都能追溯到生成的报告。
 
-## Implementation Order
+## 实施顺序
 
-1. Baseline audit and evidence-center tests.
-2. Fall evaluator and report aggregation.
-3. Demo preflight and profiles.
-4. Risk engine and unit tests.
-5. Emergency UI/controller and persistence.
-6. Password, audit, and schema migration.
-7. Video privacy transforms and retention cleanup.
-8. README/deck consistency and final full verification.
+1. 基线审计与证据中心测试。
+2. 跌倒评测器与报告聚合。
+3. 演示预检与配置。
+4. 风险引擎与单元测试。
+5. 应急 UI/控制器与持久化。
+6. 密码、审计与 schema 迁移。
+7. 视频隐私转换与保留期清理。
+8. README/PPT 口径统一与最终完整验证。
