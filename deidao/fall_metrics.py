@@ -7,7 +7,7 @@ runtime detector so evaluation artifacts can be checked in unit tests.
 import csv
 import json
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 
@@ -72,6 +72,8 @@ def parse_urfd_annotation_csv(path: str | Path) -> Dict[str, URFDAnnotation]:
                 frame = int(row[1])
                 label = int(row[2])
             except (IndexError, ValueError):
+                continue
+            if not sequence.strip() or frame < 0:
                 continue
 
             current = annotations.get(
@@ -161,10 +163,38 @@ def load_manifest(path: str | Path) -> dict:
     if not isinstance(manifest, dict) or not isinstance(manifest.get("entries"), list):
         raise ValueError(f"manifest must contain an entries list: {manifest_path}")
 
+    relative_video_paths = []
+    normalized_video_paths = set()
+
     for index, entry in enumerate(manifest["entries"]):
         if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
             raise ValueError(f"manifest entry {index} must contain a path string")
-        video_path = manifest_path.parent / PurePosixPath(entry["path"])
+
+        path_text = entry["path"]
+        windows_path = PureWindowsPath(path_text)
+        relative_path = PurePosixPath(path_text)
+        normalized_path = relative_path.as_posix()
+        if (
+            not path_text
+            or "\\" in path_text
+            or path_text.endswith("/")
+            or windows_path.is_absolute()
+            or windows_path.drive
+            or relative_path.is_absolute()
+            or not relative_path.parts
+            or any(part == ".." for part in relative_path.parts)
+        ):
+            raise ValueError(
+                f"manifest entry {index} must use a relative POSIX path below the manifest directory: {path_text}"
+            )
+        if normalized_path in normalized_video_paths:
+            raise ValueError(f"manifest entry {index} has a duplicate normalized path: {normalized_path}")
+
+        normalized_video_paths.add(normalized_path)
+        relative_video_paths.append(relative_path)
+
+    for relative_path in relative_video_paths:
+        video_path = manifest_path.parent / relative_path
         if not video_path.is_file():
             raise FileNotFoundError(video_path)
 
@@ -176,6 +206,7 @@ def _new_metrics() -> dict:
         "evaluated_count": 0,
         "tp": 0,
         "late_detected": 0,
+        "missing_ground_truth": 0,
         "fn": 0,
         "fp": 0,
         "tn": 0,
@@ -209,7 +240,8 @@ def summarize_results(results: Sequence[VideoEvaluationResult]) -> FallEvaluatio
     """Classify usable results and calculate overall and subgroup metrics.
 
     A late positive is a diagnostic count and is also included in the FN
-    denominator. This keeps recall strictly a timely-detection metric.
+    denominator. Missing ground truth is reported separately and excluded
+    from the timely recall denominator.
     """
 
     metric_sets = {
@@ -232,21 +264,21 @@ def summarize_results(results: Sequence[VideoEvaluationResult]) -> FallEvaluatio
 
         timely_latency = None
         if result.should_alarm:
-            if result.action_start_seconds is not None:
+            if result.action_start_seconds is None:
+                classification = "missing_ground_truth"
+                metrics_late_increment = 0
+            else:
                 deadline = result.action_start_seconds + result.max_alarm_delay_seconds
                 latencies = [
                     alarm_time - result.action_start_seconds
                     for alarm_time in result.alarm_times
                     if result.action_start_seconds <= alarm_time <= deadline
                 ]
-                if latencies:
-                    timely_latency = min(latencies)
-
-            classification = "tp" if timely_latency is not None else "fn"
-            if timely_latency is None and result.alarm_times:
-                metrics_late_increment = 1
-            else:
-                metrics_late_increment = 0
+                timely_latency = min(latencies) if latencies else None
+                classification = "tp" if timely_latency is not None else "fn"
+                metrics_late_increment = int(
+                    any(alarm_time > deadline for alarm_time in result.alarm_times)
+                )
         else:
             classification = "fp" if result.alarm_times else "tn"
             metrics_late_increment = 0
@@ -279,7 +311,7 @@ def summarize_results(results: Sequence[VideoEvaluationResult]) -> FallEvaluatio
 
 def _format_metric(value: Any, *, percent: bool = False, seconds: bool = False) -> str:
     if value is None:
-        return "不适用"
+        return "--"
     if percent:
         return f"{value:.2%}"
     if seconds:
@@ -302,6 +334,7 @@ def render_markdown_report(report: FallEvaluationReport) -> str:
         "## 总体指标",
         "",
         f"- 跌倒样本：{overall['tp'] + overall['fn']}",
+        f"- missing_ground_truth：{overall['missing_ground_truth']}",
         f"- TP：{overall['tp']}",
         f"- late_detected：{overall['late_detected']}",
         f"- FN：{overall['fn']}",
@@ -315,17 +348,22 @@ def render_markdown_report(report: FallEvaluationReport) -> str:
         "",
         "## 分组指标",
         "",
-        "| 分组 | TP | late_detected | FN | FP | TN | 召回率 | 误报率 |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| 分组 | 评测数 | missing_ground_truth | TP | late_detected | FN | FP | TN | "
+        "召回率 | 精确率 | 漏报率 | 误报率 | 平均及时延迟 |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
 
     for group_name in ("fall", "all_adl", "basic_adl", "low_posture_adl"):
         metrics = report.group_metrics[group_name]
         lines.append(
-            f"| {group_name} | {metrics['tp']} | {metrics['late_detected']} | "
-            f"{metrics['fn']} | {metrics['fp']} | {metrics['tn']} | "
+            f"| {group_name} | {metrics['evaluated_count']} | {metrics['missing_ground_truth']} | "
+            f"{metrics['tp']} | {metrics['late_detected']} | {metrics['fn']} | "
+            f"{metrics['fp']} | {metrics['tn']} | "
             f"{_format_metric(metrics['recall'], percent=True)} | "
+            f"{_format_metric(metrics['precision'], percent=True)} | "
+            f"{_format_metric(metrics['missed_alarm_rate'], percent=True)} | "
             f"{_format_metric(metrics['fp_rate'], percent=True)} |"
+            f"{_format_metric(metrics['average_alarm_latency_seconds'], seconds=True)} |"
         )
 
     lines.extend(
@@ -336,6 +374,7 @@ def render_markdown_report(report: FallEvaluationReport) -> str:
             "- 全量 ADL 是所有非跌倒日常活动样本，用于计算整体误报风险。",
             "- 基础 ADL 是官方日常活动中未出现 0/1 低姿态标注的样本。",
             "- 低姿态 ADL 是官方日常活动中出现 0/1 低姿态标注的样本，仍是负样本。",
+            "- 及时检测要求报警时间位于 [action_start, action_start + max_alarm_delay_seconds]。",
             "- late_detected 不计入召回率；它只作为延迟诊断，召回率仅统计报警窗口内的及时检测。",
         ]
     )
