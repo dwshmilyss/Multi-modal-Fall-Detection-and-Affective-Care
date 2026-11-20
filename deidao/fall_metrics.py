@@ -112,29 +112,32 @@ def build_urfd_manifest(
     adls = parse_urfd_annotation_csv(adls_csv)
 
     for label, annotations in (("fall", falls), ("adl", adls)):
-        for sequence in sorted(annotations):
-            annotation = annotations[sequence]
-            relative_path = PurePosixPath(label, f"{sequence}-cam0.mp4").as_posix()
-            video_path = dataset_path / PurePosixPath(relative_path)
+        for video_path in sorted((dataset_path / label).glob("*-cam0.mp4")):
             if not video_path.is_file():
-                raise FileNotFoundError(video_path)
+                continue
+            sequence = video_path.stem.removesuffix("-cam0")
+            annotation = annotations.get(sequence)
 
             entries.append(
                 {
-                    "path": relative_path,
+                    "path": PurePosixPath(label, video_path.name).as_posix(),
                     "label": label,
                     "should_alarm": label == "fall",
                     "action_start_seconds": (
-                        annotation.first_falling_frame / fps if annotation.first_falling_frame is not None else None
+                        annotation.first_falling_frame / fps
+                        if annotation is not None and annotation.first_falling_frame is not None
+                        else None
                     ),
                     "lying_start_seconds": (
-                        annotation.first_lying_frame / fps if annotation.first_lying_frame is not None else None
+                        annotation.first_lying_frame / fps
+                        if annotation is not None and annotation.first_lying_frame is not None
+                        else None
                     ),
                     "max_alarm_delay_seconds": 2.0,
                     "activity_group": "fall"
                     if label == "fall"
                     else "low_posture_adl"
-                    if annotation.has_low_posture
+                    if annotation is not None and annotation.has_low_posture
                     else "basic_adl",
                 }
             )

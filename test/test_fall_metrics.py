@@ -167,6 +167,38 @@ def test_load_manifest_rejects_missing_video(tmp_path):
         load_manifest(manifest_path)
 
 
+def test_manifest_includes_existing_adl_video_without_annotation(tmp_path):
+    falls_csv = tmp_path / "urfall-cam0-falls.csv"
+    adls_csv = tmp_path / "urfall-cam0-adls.csv"
+    write_csv(falls_csv, [])
+    write_csv(adls_csv, [])
+    create_video(tmp_path, "fall/fall-99-cam0.mp4")
+    create_video(tmp_path, "adl/adl-99-cam0.mp4")
+
+    manifest = build_urfd_manifest(tmp_path, falls_csv, adls_csv, fps=30.0)
+
+    assert manifest["entries"] == [
+        {
+            "path": "fall/fall-99-cam0.mp4",
+            "label": "fall",
+            "should_alarm": True,
+            "action_start_seconds": None,
+            "lying_start_seconds": None,
+            "max_alarm_delay_seconds": 2.0,
+            "activity_group": "fall",
+        },
+        {
+            "path": "adl/adl-99-cam0.mp4",
+            "label": "adl",
+            "should_alarm": False,
+            "action_start_seconds": None,
+            "lying_start_seconds": None,
+            "max_alarm_delay_seconds": 2.0,
+            "activity_group": "basic_adl",
+        }
+    ]
+
+
 def make_result(
     path,
     label,
