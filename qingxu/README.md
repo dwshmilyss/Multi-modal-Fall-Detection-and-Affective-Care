@@ -63,6 +63,58 @@ with ViTFaceEmotionRecognizer() as recognizer:
 
 The classifier runs on CUDA when ONNX Runtime can load its CUDA provider, and automatically falls back to CPU. On CPU-only machines, expect lower inference frequency; the popup continues rendering camera frames between inferences.
 
+## HSEmotion Phase 1 Benchmark
+
+The default popup classifier remains the bundled ViT model. HSEmotion is installed as an offline comparison backend so a model change is based on measured results from your camera/data rather than public benchmark scores.
+
+Restore the optional Apache-2.0 HSEmotion ONNX weights:
+
+```powershell
+.\.venv\Scripts\python.exe qingxu\download_hsemotion_models.py
+```
+
+The downloader validates model size and replaces interrupted partial files. It stores weights under the Git-ignored path:
+
+```text
+qingxu/models/affectnet_emotions/onnx/
+```
+
+Expected downloads are approximately 16 MB for `enet_b0_8_best_vgaf` and 31 MB for `enet_b2_8`. A proxy or slow GitHub connection may require retrying the command.
+
+Build a small local evaluation set with one folder per ground-truth label. Folder names may be English or Chinese:
+
+```text
+dataset/
+├── happy/
+│   ├── happy-front.mp4
+│   └── happy-low-light.png
+├── sad/
+├── angry/
+├── disgust/
+├── fear/
+├── neutral/
+└── surprise/
+```
+
+Images are evaluated once. Videos are sampled every fifth frame by default, up to 20 frames per video. Every backend receives exactly the same MediaPipe face crop, so differences come from classifiers rather than face detection.
+
+Run:
+
+```powershell
+.\.venv\Scripts\python.exe qingxu\benchmark_emotion_models.py path\to\dataset --backends vit hse_b0 hse_b2
+```
+
+The command writes:
+
+```text
+qingxu/output/benchmarks/emotion_model_benchmark.json
+qingxu/output/benchmarks/emotion_model_benchmark.md
+```
+
+Compare `accuracy`, `macro_f1`, per-class F1, average latency, and retained preview errors. A good candidate for replacing the popup default should improve macro F1 without degrading the most important classes or realtime latency. The seven-label comparison intentionally excludes ground-truth `contempt`; if HSEmotion predicts contempt, it is counted as an error because the current product UI does not expose that class.
+
+Each backend receives one synthetic warm-up inference before latency is recorded. This excludes first-run CUDA graph/JIT initialization from steady-state timing.
+
 ## Legacy YOLO Usage
 
 To run the model for face emotion detection, use the following script:

@@ -5,7 +5,7 @@
 > 适用于智慧养老、智能安防、毕业设计等场景；检测结果不应作为医疗诊断或唯一安全决策依据。
 
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d4)
-![Python](https://img.shields.io/badge/python-3.8%E2%80%933.11-3776ab)
+![Python](https://img.shields.io/badge/python-3.11-3776ab)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Stack](https://img.shields.io/badge/stack-PyQt6%20%7C%20Ultralytics%20%7C%20MediaPipe%20%7C%20MySQL-orange)
 
@@ -29,7 +29,7 @@
 | 双角色系统 | 管理员运维端（`root`）/ 家属亲情看护端（`family`） |
 | 健康指标大屏 | 心率/血氧/血压/步数/体温/电量，每 2 秒刷新；点击卡片看 ECharts 趋势图，可导出 CSV 报告 |
 | **智能健康告警** | 警告/危险两级告警 + 弹窗 + 告警音，5 秒冷却防轰炸，可静音，含记录面板与统计 |
-| **华为手环 9 接入** | Gadgetbridge + MQTT 真实设备数据流，心率变异性（HRV）血压估算；默认为模拟器模式 |
+| **华为手环 9 接入** | Gadgetbridge SQLite 数据库桥接 + MQTT；心率/血氧/步数真实数据，缺失指标显示 `--` |
 | 中文字体自适应 | `msyh.ttc` / `simhei.ttf` 自动回退 |
 
 > 📄 详细文档（`md/` 目录）：[跌倒检测算法优化](md/FALL_DETECTION_OPTIMIZATION.md) · [智能告警系统](md/ALARM_SYSTEM_README.md) · [健康大屏](md/HEALTH_DASHBOARD_README.md) · [华为手环 9 接入指南](md/HUAWEI_BAND_GUIDE.md) · [飞书机器人配置指南](md/飞书机器人配置指南.md)
@@ -118,7 +118,7 @@ AI-Vision-Guardian/
 | 项 | 要求 |
 | --- | --- |
 | OS | Windows 10 / 11（SAPI5 仅 Windows，原生支持中文 TTS） |
-| Python | 3.8 ~ 3.11 |
+| Python | 3.11.x（推荐使用项目 `.venv`，当前为 3.11.6） |
 | MySQL | 5.7+ / 8.x，本地 `localhost:3306`（若无需数据库可禁用） |
 | 硬件 | 摄像头 / 麦克风 / 扬声器（可选） |
 | GPU | 可选；CPU 也能跑（建议 RTX 1650 以上） |
@@ -133,13 +133,13 @@ AI-Vision-Guardian/
 git clone https://github.com/<your-username>/AI-Vision-Guardian.git
 cd AI-Vision-Guardian
 
-python -m venv .venv
+py -3.11 -m venv .venv
 # Windows
 .venv\Scripts\activate
 # macOS / Linux（如跨平台调试）
 # source .venv/bin/activate
 
-pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 ### 2. 下载大文件（不进 Git）
@@ -179,13 +179,13 @@ copy .env.example .env
 
 ```bash
 # 跌倒检测主系统
-cd deidao && python main.py
+.\.venv\Scripts\python.exe deidao\main.py
 
 # 情绪识别独立 demo
-cd qingxu && python app.py
+.\.venv\Scripts\python.exe qingxu\app.py
 
 # 功能测试（告警 / 设备适配 / 健康大屏 / 情绪管线）
-python -m pytest test/
+.\.venv\Scripts\python.exe -m pytest test/
 ```
 
 ---
@@ -233,7 +233,7 @@ python -m pytest test/
 
 ### 健康指标大屏
 
-从主界面顶部「健康大屏」按钮打开（或 `python test/test_health_dashboard.py` 独立测试）：
+从主界面顶部「健康大屏」按钮打开（或 `.\.venv\Scripts\python.exe test/test_health_dashboard.py` 独立测试）：
 
 - **实时指标**：心率 ❤️ / 血氧 🫁 / 血压 🩸 / 步数 👟 / 体温 🌡️ / 电量 🔋，QTimer 每 2 秒自动刷新；顶部显示设备连接状态与数据更新时间戳
 - **ECharts 趋势图**：点击任意指标卡片弹出，支持 24 小时 / 7 天 / 30 天切换，渐变面积图、异常区间高亮、阈值标记线（依赖 `PyQt6-WebEngine`，已包含在 requirements.txt；首次打开需联网加载 CDN）
@@ -255,23 +255,28 @@ python -m pytest test/
 - **危险级告警**自动弹出置顶告警弹窗（含时间 / 当前值 / 健康建议）
 - **告警记录面板**（大屏底部）：实时显示最近 10 条记录 + 总计/警告/危险统计 + 静音开关 + 一键清空；内存中最多保留 500 条
 - **冷却机制**：同类告警 5 秒内不重复触发，避免声音轰炸
-- 独立测试：`python -m pytest test/test_alarm_system.py`
+- 独立测试：`.\.venv\Scripts\python.exe -m pytest test/test_alarm_system.py`
 
 ### 华为手环 9 真实设备接入（可选）
 
-默认运行在模拟器模式；接入真实手环的数据流架构：
+接入真实手环的数据流架构：
 
 ```
-华为手环 9 → 蓝牙 → 手机 Gadgetbridge（开源 App）→ MQTT Broker（Mosquitto）→ 本项目
+华为手环 9 → 手机 Gadgetbridge → 自动导出 Gadgetbridge.db
+  → tools/gadgetbridge_mqtt_bridge.py → MQTT Broker → 本项目
 ```
 
-1. Android 手机安装 [Gadgetbridge](https://gadgetbridge.org/)（免费开源），配对手环；心率/血氧/步数/体温/电量均可直采
+1. Android 手机安装 [Gadgetbridge](https://gadgetbridge.org/)，完成手环配对、活动同步和数据库自动导出
 2. 电脑安装并启动 [Mosquitto](https://mosquitto.org/)（默认端口 1883）
-3. 在 Gadgetbridge 设置中启用 MQTT 推送，指向电脑 IP
-4. 修改 `deidao/device_config.json`：`mode` 由 `simulator` 改为 `huawei_band`，填入 MQTT 地址与用户档案（年龄 / 性别 / 静息心率）
-5. 按「Mosquitto → Gadgetbridge → 本项目」顺序启动，健康大屏右上角显示「华为手环 - 已连接」即接入成功
+3. 将 `Gadgetbridge.db` 同步到电脑，先用 `.\.venv\Scripts\python.exe tools/gadgetbridge_mqtt_bridge.py --db <路径> --once --dry-run` 验证
+4. 启动 `tools/gadgetbridge_mqtt_bridge.py`，由它把最新心率/血氧/步数发布到 MQTT
+5. `deidao/device_config.json` 保持 `mode: huawei_band`，并确保 `device_id/topic_prefix` 与桥接器一致
 
-**血压估算算法**：手环 9 不支持血压直测，系统基于心率变异性（HRV）估算——`收缩压 = 基础收缩压 + (当前心率 − 静息心率) × 0.5`（舒张压系数 0.2），基础值按年龄段与性别查表。⚠️ 估算值仅供参考，不能替代医疗设备测量。
+这条链路读取的是 Gadgetbridge 已同步数据，不是实时原始传感器流；手环 9 不能通过该链路提供加速度计实时跌倒检测。体温和血压默认不伪造，血压估算也必须显式开启且只能作为非医疗参考。
+
+手环接入使用 Gadgetbridge 导出的 **SQLite 单文件数据库** `Gadgetbridge.db`。Windows 不需要安装 SQLite 服务，也不需要额外安装 Python 包；桥接器通过 Python 标准库 `sqlite3` 只读该文件。项目原有 MySQL 不参与这条健康数据链路。
+
+华为模式默认开启 `fallback_to_simulator`：没有真实手环消息时，健康大屏保持原有 2 秒模拟刷新用于比赛演示；第一条真实 MQTT 数据到达后自动停止模拟并切换为真实数据，状态栏会明确标出当前是模拟演示还是真实数据。
 
 ### 飞书机器人推送配置
 
@@ -320,7 +325,7 @@ python -m pytest test/
 
 | 现象 | 排查 |
 | --- | --- |
-| 主程序启动即 "导入 PyQt6 失败" | `pip install --upgrade PyQt6` |
+| 主程序启动即 "导入 PyQt6 失败" | `.\.venv\Scripts\python.exe -m pip install --upgrade PyQt6` |
 | 第一次朗读 OK，第二次无声 | 已修复，确保拉到最新 `dialogs.py` |
 | AI 弹窗不朗读 | 看 `lbl_tts_status` 状态栏：显示 `TTS 不可用: ...` 则按错误处理 |
 | 点"停止朗读"按钮像没生效 | 已用 `startLoop+iterate`，延迟 100~300ms；如仍卡死，重启程序即可恢复 |

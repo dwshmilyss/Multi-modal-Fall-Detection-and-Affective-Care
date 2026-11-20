@@ -29,6 +29,7 @@ env/
 *.weights
 *.engine
 *.pkl
+qingxu/models/affectnet_emotions/onnx/**/*.part
 qingxu/Emotion-Detection-1
 qingxu/dataset
 qingxu/runs
@@ -45,6 +46,7 @@ msyh.ttc
 simhei.ttf
 alarm.mp3
 health_alarm.mp3
+assets
 
 # ============== 视频输入 / 输出 ==============
 video/*.mp4

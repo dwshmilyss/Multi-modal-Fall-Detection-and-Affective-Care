@@ -14,6 +14,7 @@
 """
 
 import json
+import math
 import os
 import time
 import threading
@@ -29,14 +30,14 @@ logger = logging.getLogger(__name__)
 
 class BloodPressureEstimator:
     """
-    基于心率变异性 (HRV) 的血压估算算法
+    基于心率和用户档案的血压经验估算算法
     
     原理：
     - 收缩压 (SBP) 与心率呈正相关（心率越高，收缩压越高）
     - 舒张压 (DBP) 与心率呈弱正相关
     - 年龄也是影响血压的重要因素
     
-    注意：这是估算值，仅供参考，不能替代医疗设备测量
+    注意：这不是测量值，仅供参考，不能替代医疗设备测量
     """
     
     @staticmethod
@@ -352,9 +353,21 @@ class MQTTAdapter(DeviceAdapter):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self._client = None
-        self._topic = config.get("topic", "health/device/+")
+        self._topic = self._subscription_topic()
         self._device_id = config.get("device_id", "")
         self._mqtt_client = None
+        self._connected_event = threading.Event()
+
+    def _subscription_topic(self) -> str:
+        explicit_topic = self.config.get("topic")
+        if explicit_topic:
+            return str(explicit_topic)
+
+        prefix = str(self.config.get("topic_prefix", "health")).strip("/")
+        device_id = str(self.config.get("device_id", "")).strip()
+        if not device_id:
+            return f"{prefix}/+/health"
+        return f"{prefix}/{device_id}/health"
     
     @property
     def mode_name(self) -> str:
@@ -375,10 +388,14 @@ class MQTTAdapter(DeviceAdapter):
             username = self.config.get("username", "")
             password = self.config.get("password", "")
             client_id = self.config.get("client_id", "health_monitor_client")
-            
+
+            client_kwargs = {}
+            if hasattr(mqtt, "CallbackAPIVersion"):
+                client_kwargs["callback_api_version"] = mqtt.CallbackAPIVersion.VERSION1
             self._mqtt_client = mqtt.Client(
                 client_id=client_id,
                 protocol=mqtt.MQTTv311,
+                **client_kwargs,
             )
             
             if username:
@@ -387,28 +404,40 @@ class MQTTAdapter(DeviceAdapter):
             self._mqtt_client.on_connect = self._on_connect
             self._mqtt_client.on_message = self._on_message
             self._mqtt_client.on_disconnect = self._on_disconnect
+            self._mqtt_client.reconnect_delay_set(min_delay=1, max_delay=30)
             
             self._connection_status = "connecting"
-            self._mqtt_client.connect(broker, port, keepalive=60)
+            self._connected_event.clear()
+            self._mqtt_client.connect_async(broker, port, keepalive=60)
             self._mqtt_client.loop_start()
-            
+
+            timeout = float(self.config.get("connect_timeout_s", 5.0))
+            if not self._connected_event.wait(timeout):
+                self._connection_status = "error"
+                self._emit_error(f"MQTT Broker 连接超时: {broker}:{port}")
+                self._cleanup_mqtt_client()
+                return False
+            if self._connection_status != "connected":
+                self._cleanup_mqtt_client()
+                return False
             return True
         except Exception as e:
             self._connection_status = "error"
             self._emit_error(f"MQTT 连接失败: {e}")
+            self._cleanup_mqtt_client()
             return False
     
     def _on_connect(self, client, userdata, flags, rc):
         if rc == 0:
             self._connection_status = "connected"
-            topic = self._topic
-            if self._device_id:
-                topic = f"{self.config.get('topic_prefix', 'health')}/{self._device_id}/health"
+            topic = self._subscription_topic()
             client.subscribe(topic)
             logger.info(f"MQTT 已连接，订阅主题: {topic}")
+            self._connected_event.set()
         else:
             self._connection_status = "error"
             self._emit_error(f"MQTT 连接被拒绝，返回码: {rc}")
+            self._connected_event.set()
     
     def _on_message(self, client, userdata, msg):
         """处理收到的 MQTT 消息"""
@@ -422,6 +451,7 @@ class MQTTAdapter(DeviceAdapter):
             self._emit_error(f"MQTT 消息处理异常: {e}")
     
     def _on_disconnect(self, client, userdata, rc):
+        self._connected_event.set()
         if rc != 0:
             self._connection_status = "error"
             self._emit_error(f"MQTT 意外断开，返回码: {rc}")
@@ -430,11 +460,22 @@ class MQTTAdapter(DeviceAdapter):
     
     def disconnect(self):
         self.stop()
-        if self._mqtt_client:
-            self._mqtt_client.loop_stop()
-            self._mqtt_client.disconnect()
-            self._mqtt_client = None
+        self._cleanup_mqtt_client()
         self._connection_status = "disconnected"
+
+    def _cleanup_mqtt_client(self):
+        if not self._mqtt_client:
+            return
+        client = self._mqtt_client
+        self._mqtt_client = None
+        try:
+            client.disconnect()
+        except Exception:
+            pass
+        try:
+            client.loop_stop()
+        except Exception:
+            pass
     
     def start(self):
         """MQTT 模式下，start 仅标记为运行中（数据由回调驱动）"""
@@ -607,11 +648,23 @@ class HuaweiBandAdapter(MQTTAdapter):
     """
     
     def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.user_profile = config.get("user_profile", {})
+        huawei_config = config.get("huawei_band", {})
+        mqtt_config = huawei_config.get("mqtt", {})
+        adapter_config = dict(config)
+        adapter_config.update(huawei_config)
+        adapter_config.update(mqtt_config)
+
+        super().__init__(adapter_config)
+        self.user_profile = huawei_config.get("user_profile", {})
         self.age = self.user_profile.get("age", 65)
         self.gender = self.user_profile.get("gender", "male")
         self.resting_hr = self.user_profile.get("resting_hr", 70)
+        self.estimate_blood_pressure = bool(
+            config.get("estimate_blood_pressure", huawei_config.get("estimate_blood_pressure", False))
+        )
+        self.fallback_to_simulator = bool(
+            config.get("fallback_to_simulator", huawei_config.get("fallback_to_simulator", True))
+        )
         self._hr_history = []
         self._max_hr_history = 60  # 保留最近 60 次心率数据
     
@@ -623,35 +676,37 @@ class HuaweiBandAdapter(MQTTAdapter):
         """处理 Gadgetbridge 推送的数据"""
         try:
             payload = json.loads(msg.payload.decode('utf-8'))
+            if not isinstance(payload, dict):
+                raise ValueError("消息必须是 JSON 对象")
             
-            # Gadgetbridge 数据格式解析
             heart_rate = self._parse_heart_rate(payload)
             spo2 = self._parse_spo2(payload)
             steps = self._parse_steps(payload)
             battery = self._parse_battery(payload)
+            temperature = self._parse_temperature(payload)
             
-            # 使用心率估算血压
-            if heart_rate > 0:
-                self._hr_history.append(heart_rate)
-                if len(self._hr_history) > self._max_hr_history:
-                    self._hr_history.pop(0)
-                
-                bp_s, bp_d = BloodPressureEstimator.estimate_from_history(
-                    self._hr_history, self.age, self.gender
+            supported_values = (heart_rate, spo2, steps, battery, temperature)
+            if all(math.isnan(value) for value in supported_values):
+                self._emit_error("华为手环消息中没有可用的健康指标")
+                return
+
+            bp_s, bp_d = math.nan, math.nan
+            if self.estimate_blood_pressure and not math.isnan(heart_rate):
+                bp_s, bp_d = BloodPressureEstimator.estimate(
+                    heart_rate, self.age, self.gender, self.resting_hr
                 )
-            else:
-                bp_s, bp_d = 120.0, 80.0
             
-            # 构造标准 HealthData
             data = HealthData(
-                heart_rate=heart_rate if heart_rate > 0 else 76.0,
-                spo2=spo2 if spo2 > 0 else 98.0,
+                heart_rate=heart_rate,
+                spo2=spo2,
                 bp_systolic=bp_s,
                 bp_diastolic=bp_d,
                 steps=steps,
-                temperature=36.5,  # 华为手环通常不提供体温
-                battery=battery if battery > 0 else 85.0,
-                device_id=self._device_id or "huawei_band",
+                temperature=temperature,
+                battery=battery,
+                timestamp=self._parse_timestamp(payload),
+                device_id=str(payload.get("device_id") or self._device_id or "huawei_band"),
+                raw_data=payload,
             )
             
             self._emit_data(data)
@@ -660,36 +715,57 @@ class HuaweiBandAdapter(MQTTAdapter):
     
     def _parse_heart_rate(self, payload: Dict) -> float:
         """从 Gadgetbridge 数据解析心率"""
-        # Gadgetbridge 心率数据格式
-        if "heart_rate" in payload:
-            return float(payload["heart_rate"])
-        if "hr" in payload:
-            return float(payload["hr"])
-        if "bpm" in payload:
-            return float(payload["bpm"])
-        return 0.0
+        return self._parse_positive_float(payload, ("heart_rate", "hr", "bpm"))
     
     def _parse_spo2(self, payload: Dict) -> float:
         """从 Gadgetbridge 数据解析血氧"""
-        if "spo2" in payload:
-            return float(payload["spo2"])
-        if "oxygen" in payload:
-            return float(payload["oxygen"])
-        return 0.0
+        return self._parse_positive_float(payload, ("spo2", "oxygen"))
     
     def _parse_steps(self, payload: Dict) -> int:
         """从 Gadgetbridge 数据解析步数"""
         if "steps" in payload:
-            return int(payload["steps"])
-        return 0
+            try:
+                steps = int(payload["steps"])
+            except (TypeError, ValueError):
+                return math.nan
+            return steps if steps >= 0 else math.nan
+        return math.nan
     
     def _parse_battery(self, payload: Dict) -> float:
         """从 Gadgetbridge 数据解析电量"""
-        if "battery" in payload:
-            return float(payload["battery"])
-        if "level" in payload:
-            return float(payload["level"])
-        return 0.0
+        return self._parse_positive_float(payload, ("battery", "battery_level", "level"))
+
+    def _parse_temperature(self, payload: Dict) -> float:
+        """从 Gadgetbridge 数据解析温度，缺失时保持未知"""
+        return self._parse_positive_float(
+            payload, ("temperature", "skin_temperature", "body_temperature")
+        )
+
+    @staticmethod
+    def _parse_positive_float(payload: Dict, keys: Tuple[str, ...]) -> float:
+        for key in keys:
+            value = payload.get(key)
+            if value is None:
+                continue
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                return parsed
+        return math.nan
+
+    @staticmethod
+    def _parse_timestamp(payload: Dict) -> datetime:
+        value = payload.get("timestamp")
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+            except ValueError:
+                pass
+        return datetime.now()
 
 
 # ==================== 工厂函数 ====================
@@ -735,6 +811,24 @@ DEFAULT_CONFIG = {
         "client_id": "health_monitor",
         "topic_prefix": "health",
         "device_id": "",
+    },
+    "huawei_band": {
+        "mqtt": {
+            "broker": "localhost",
+            "port": 1883,
+            "username": "",
+            "password": "",
+            "client_id": "health_monitor_huawei_band",
+            "topic_prefix": "gadgetbridge",
+            "device_id": "",
+        },
+        "user_profile": {
+            "age": 65,
+            "gender": "male",
+            "resting_hr": 70,
+        },
+        "estimate_blood_pressure": False,
+        "fallback_to_simulator": True,
     },
     "tcp": {
         "host": "0.0.0.0",

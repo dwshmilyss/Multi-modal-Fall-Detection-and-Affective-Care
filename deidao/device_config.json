@@ -26,7 +26,7 @@
       "topic_prefix": "gadgetbridge",
       "broker": "localhost",
       "password": "",
-      "device_id": "huawei_band_001"
+      "device_id": "huawei_band_9"
     },
     "user_profile": {
       "resting_hr": 70,
@@ -34,6 +34,8 @@
       "gender": "male",
       "_comment": "用户档案（用于血压估算）"
     },
+    "estimate_blood_pressure": false,
+    "fallback_to_simulator": true,
     "_comment": "华为手环模式配置（基于 Gadgetbridge + MQTT）"
   },
   "tcp": {

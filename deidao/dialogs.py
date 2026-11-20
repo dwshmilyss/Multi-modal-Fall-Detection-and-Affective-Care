@@ -416,15 +416,28 @@ class HealthDataSimulator:
             self.history.pop(0)
     
     def get_status(self, metric, value):
+        def unavailable(item):
+            return item is None or _math.isnan(float(item))
+
         if metric == "heart_rate":
+            if unavailable(value):
+                return "暂无数据", "#94A3B8"
             return ("异常", "#EF4444") if value < 60 or value > 100 else ("正常平稳", "#10B981")
         elif metric == "spo2":
+            if unavailable(value):
+                return "暂无数据", "#94A3B8"
             return ("偏低", "#F59E0B") if value < 95 else ("优良安全", "#10B981")
         elif metric == "bp":
+            if unavailable(value[0]):
+                return "暂无数据", "#94A3B8"
             return ("血压异常", "#EF4444") if value[0] > 140 or value[0] < 90 else ("正常范围", "#10B981")
         elif metric == "temperature":
+            if unavailable(value):
+                return "暂无数据", "#94A3B8"
             return ("发热", "#EF4444") if value > 37.5 else ("无发热", "#10B981")
         elif metric == "battery":
+            if unavailable(value):
+                return "暂无数据", "#94A3B8"
             return ("电量不足", "#EF4444") if value < 20 else ("续航充足", "#10B981")
         return ("正常", "#10B981")
 
@@ -707,8 +720,15 @@ class HealthTrendDialog(QDialog):
 
 class HealthDashboardDialog(QDialog):
     """️ 专属老人健康指标可视化大屏弹窗（动态数据 + ECharts 趋势图）"""
+    device_data_received = pyqtSignal(object)
+    device_error_received = pyqtSignal(str)
+
     def __init__(self, parent=None, device_config: Optional[Dict] = None):
         super().__init__(parent)
+        self.device_data_received.connect(self._on_device_data)
+        self.device_error_received.connect(self._on_device_error)
+        self._last_device_data = None
+        self.simulation_fallback_active = False
         self.setWindowTitle(" 智能养老 - 老人健康指标可视化监控大屏")
         self.resize(1200, 850)  # 增加高度以容纳告警面板
         
@@ -911,31 +931,57 @@ class HealthDashboardDialog(QDialog):
         """启动数据源（根据配置选择模拟或真实设备）"""
         if self.device_adapter:
             # 使用设备适配器
-            self.device_adapter.on_data(self._on_device_data)
-            self.device_adapter.on_error(self._on_device_error)
+            self.device_adapter.on_data(lambda data: self.device_data_received.emit(data))
+            self.device_adapter.on_error(lambda message: self.device_error_received.emit(message))
             if self.device_adapter.connect():
                 self.device_adapter.start()
-                self.device_status_lbl.setText(f"📡 数据源：{self.device_adapter.mode_name} - 已连接")
+                if getattr(self.device_adapter, "fallback_to_simulator", False):
+                    self._start_timer(mark_fallback=True)
+                    self.device_status_lbl.setText(
+                        f"📡 数据源：{self.device_adapter.mode_name} - 已连接，模拟演示等待真实数据"
+                    )
+                else:
+                    self.device_status_lbl.setText(f"📡 数据源：{self.device_adapter.mode_name} - 已连接")
             else:
                 self.device_status_lbl.setText(f"📡 数据源：{self.device_adapter.mode_name} - 连接失败")
-                # 回退到模拟模式
-                self._fallback_to_simulator()
+                if getattr(self.device_adapter, "fallback_to_simulator", True):
+                    # 比赛演示时必须保留可用的动态数据
+                    self._fallback_to_simulator()
         else:
             # 使用模拟器
-            self.start_timer()
+            self._start_timer(mark_fallback=False)
     
-    def start_timer(self):
+    def _start_timer(self, mark_fallback: bool = False):
         """启动定时刷新（模拟模式）"""
+        self._ensure_simulator()
+        if getattr(self, "timer", None) is not None:
+            self.timer.stop()
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_data)
+        self.simulation_fallback_active = mark_fallback
         self.timer.start(2000)  # 每 2 秒刷新
         self.update_data()  # 立即更新一次
-    
-    def _on_device_data(self, data: HealthData):
-        """处理设备适配器传来的数据"""
-        # 更新模拟器数据（用于历史趋势图）
+
+    def _ensure_simulator(self):
         if self.simulator is None:
             self.simulator = HealthDataSimulator()
+
+    def _on_device_data(self, data: HealthData):
+        """在 Qt 主线程处理设备适配器传来的数据"""
+        if self.simulation_fallback_active:
+            if getattr(self, "timer", None) is not None:
+                self.timer.stop()
+            self.simulation_fallback_active = False
+            self.simulator.history.clear()
+            self.device_status_lbl.setText(
+                f"📡 数据源：{self.device_adapter.mode_name} - 已连接（真实数据）"
+            )
+        self._apply_health_data(data)
+
+    def _apply_health_data(self, data: HealthData):
+        """写入真实数据并立即渲染，不触发模拟器随机更新"""
+        self._ensure_simulator()
+        self._last_device_data = data
         
         self.simulator.heart_rate = data.heart_rate
         self.simulator.spo2 = data.spo2
@@ -949,9 +995,9 @@ class HealthDashboardDialog(QDialog):
             data.bp_systolic, data.bp_diastolic, data.steps,
             data.temperature, data.battery
         ))
-        
-        # 更新 UI
-        self.update_data()
+        if len(self.simulator.history) > self.simulator.max_history:
+            self.simulator.history.pop(0)
+        self._render_health_data()
     
     def _on_device_error(self, message: str):
         """处理设备适配器错误"""
@@ -962,18 +1008,34 @@ class HealthDashboardDialog(QDialog):
         """回退到模拟模式"""
         logger.info("回退到模拟模式")
         self.simulator = HealthDataSimulator()
-        self.start_timer()
+        self._start_timer(mark_fallback=True)
+        self.device_status_lbl.setText("📡 数据源：模拟演示模式（设备未连接）")
     
     def update_data(self):
         """更新所有指标数据"""
-        self.simulator.update()
+        if self.simulation_fallback_active:
+            self.simulator.update()
+        self._render_health_data()
+
+    @staticmethod
+    def _value_missing(value) -> bool:
+        try:
+            return value is None or _math.isnan(float(value))
+        except (TypeError, ValueError):
+            return True
+
+    def _metric_text(self, value, formatted: str) -> str:
+        return "--" if self._value_missing(value) else formatted
+
+    def _render_health_data(self):
+        """只负责把 simulator 当前值渲染到界面"""
         
         # 更新心率
         hr = self.simulator.heart_rate
         hr_status, hr_color = self.simulator.get_status("heart_rate", hr)
-        self.card_hr.lbl_val.setText(f"{hr:.0f} bpm")
+        self.card_hr.lbl_val.setText("-- bpm" if self._value_missing(hr) else f"{hr:.0f} bpm")
         self.card_hr.lbl_status.setText(f"状态：{hr_status}")
-        if hr_color != "#10B981":
+        if hr_color != "#94A3B8" and hr_color != "#10B981":
             self.card_hr.lbl_val.setStyleSheet(f"color: #EF4444; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;")
             alarm = self.alarm_manager.check_and_record("heart_rate", f"{hr:.0f} bpm", hr_status, hr_color)
             if alarm:
@@ -984,9 +1046,12 @@ class HealthDashboardDialog(QDialog):
         # 更新血氧
         spo2 = self.simulator.spo2
         spo2_status, spo2_color = self.simulator.get_status("spo2", spo2)
-        self.card_spo2.lbl_val.setText(f"{spo2:.1f} %")
+        self.card_spo2.lbl_val.setText("-- %" if self._value_missing(spo2) else f"{spo2:.1f} %")
         self.card_spo2.lbl_status.setText(f"状态：{spo2_status}")
-        if spo2_color != "#10B981":
+        self.card_spo2.lbl_val.setStyleSheet(
+            f"color: {self.card_spo2.accent_color}; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;"
+        )
+        if spo2_color != "#94A3B8" and spo2_color != "#10B981":
             alarm = self.alarm_manager.check_and_record("spo2", f"{spo2:.1f}%", spo2_status, spo2_color)
             if alarm:
                 self.handle_alarm(alarm)
@@ -995,24 +1060,30 @@ class HealthDashboardDialog(QDialog):
         bp_s = self.simulator.bp_systolic
         bp_d = self.simulator.bp_diastolic
         bp_status, bp_color = self.simulator.get_status("bp", (bp_s, bp_d))
-        self.card_bp.lbl_val.setText(f"{bp_s:.0f} / {bp_d:.0f} mmHg")
+        self.card_bp.lbl_val.setText(
+            "-- / -- mmHg" if self._value_missing(bp_s) else f"{bp_s:.0f} / {bp_d:.0f} mmHg"
+        )
         self.card_bp.lbl_status.setText(f"状态：{bp_status}")
-        if bp_color != "#10B981":
+        if bp_color != "#94A3B8" and bp_color != "#10B981":
             alarm = self.alarm_manager.check_and_record("bp", f"{bp_s:.0f}/{bp_d:.0f}", bp_status, bp_color)
             if alarm:
                 self.handle_alarm(alarm)
         
         # 更新步数
-        self.card_steps.lbl_val.setText(f"{self.simulator.steps:.0f} 步")
-        goal_pct = min(100, (self.simulator.steps / 5000) * 100)
-        self.card_steps.lbl_status.setText(f"目标达成率：{goal_pct:.0f}% ({'活跃' if goal_pct > 50 else '待加强'})")
+        steps = self.simulator.steps
+        self.card_steps.lbl_val.setText("-- 步" if self._value_missing(steps) else f"{steps:.0f} 步")
+        if self._value_missing(steps):
+            self.card_steps.lbl_status.setText("目标达成率：--")
+        else:
+            goal_pct = min(100, (steps / 5000) * 100)
+            self.card_steps.lbl_status.setText(f"目标达成率：{goal_pct:.0f}% ({'活跃' if goal_pct > 50 else '待加强'})")
         
         # 更新体温
         temp = self.simulator.temperature
         temp_status, temp_color = self.simulator.get_status("temperature", temp)
-        self.card_temp.lbl_val.setText(f"{temp:.1f} ℃")
+        self.card_temp.lbl_val.setText("-- ℃" if self._value_missing(temp) else f"{temp:.1f} ℃")
         self.card_temp.lbl_status.setText(f"状态：{temp_status}")
-        if temp_color != "#10B981":
+        if temp_color != "#94A3B8" and temp_color != "#10B981":
             self.card_temp.lbl_val.setStyleSheet(f"color: #EF4444; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;")
             alarm = self.alarm_manager.check_and_record("temperature", f"{temp:.1f}℃", temp_status, temp_color)
             if alarm:
@@ -1023,9 +1094,9 @@ class HealthDashboardDialog(QDialog):
         # 更新电量
         battery = self.simulator.battery
         batt_status, batt_color = self.simulator.get_status("battery", battery)
-        self.card_battery.lbl_val.setText(f"{battery:.1f} %")
+        self.card_battery.lbl_val.setText("-- %" if self._value_missing(battery) else f"{battery:.1f} %")
         self.card_battery.lbl_status.setText(f"状态：{batt_status}")
-        if batt_color != "#10B981":
+        if batt_color != "#94A3B8" and batt_color != "#10B981":
             self.card_battery.lbl_val.setStyleSheet(f"color: #EF4444; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;")
             alarm = self.alarm_manager.check_and_record("battery", f"{battery:.1f}%", batt_status, batt_color)
             if alarm:
@@ -1034,7 +1105,8 @@ class HealthDashboardDialog(QDialog):
             self.card_battery.lbl_val.setStyleSheet(f"color: {self.card_battery.accent_color}; font-size: 26px; font-weight: bold; border: none; margin: 5px 0;")
         
         # 更新时间戳
-        self.update_time_lbl.setText(f"更新：{datetime.now().strftime('%H:%M:%S')}")
+        render_time = self._last_device_data.timestamp if self._last_device_data else datetime.now()
+        self.update_time_lbl.setText(f"更新：{render_time.strftime('%H:%M:%S')}")
         
         # 更新告警统计显示
         self.update_alarm_stats_display()
