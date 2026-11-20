@@ -36,14 +36,24 @@
 
 ```text
 test_videos/evaluation/
-  fall/
-  sit_down/
-  bend_down/
-  lie_down/
-  walking/
+  urfd/
+    fall/
+      fall-01-cam0.mp4 ... fall-30-cam0.mp4
+    adl/
+      adl-01-cam0.mp4 ... adl-40-cam0.mp4
 ```
 
-当场景标签、动作开始时间或预期告警窗口与默认规则不同时，可以使用 JSON manifest 补充文件名之外的信息。
+主数据源使用 UR Fall Detection Dataset 官方 `cam0` 侧视序列，共 30 段跌倒和 40 段日常活动。官方页面为 `https://fenix.ur.edu.pl/~mkepski/ds/uf.html`，文件基址为 `https://fenix.ur.edu.pl/~mkepski/ds/data/`。下载器只获取 `cam0`，不获取俯视 `cam1`；下载后的视频和 manifest 不进入 Git 仓库。
+
+URFD 原始帧为 640×240，左半边是深度图，右半边是 RGB。评测器必须在读取每帧后截取右半边，再送入与应用一致的 YOLO + MediaPipe + `FallDetectionEngine` 管线。
+
+URFD 的 ADL 序列包含行走、坐椅、弯腰、蹲下、跪坐、地面拾物和主动躺卧等动作。报告必须同时给出：
+
+- 全量 40 段 ADL 的严格误报率；
+- 基础日常活动误报率；
+- 蹲下、跪坐、地面活动和主动躺卧等低姿态难例误报率。
+
+当某个样本的动作开始时间、场景子类或预期告警窗口与文件名默认规则不同时，使用 JSON manifest 补充信息。manifest 随下载器生成基础版本，允许人工校正，但人工校正内容必须保留在未入库的本地数据目录中。
 
 评测器输出：
 
@@ -152,6 +162,7 @@ test_videos/evaluation/
 ### 新组件
 
 ```text
+tools/download_urfd.py
 tools/evaluate_fall_videos.py
 tools/aggregate_evaluation.py
 tools/demo_preflight.py
@@ -226,6 +237,7 @@ deidao/privacy.py
 ## 参赛交付物
 
 - 一条命令生成跌倒评测报告。
+- 一条命令下载 URFD `cam0` 数据集并生成基础 manifest。
 - 合并后的算法证据页。
 - 预检工具与演示配置。
 - 可靠的离线/无手环演示路径。
