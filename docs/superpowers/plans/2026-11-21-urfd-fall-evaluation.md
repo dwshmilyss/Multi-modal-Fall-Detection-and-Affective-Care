@@ -328,7 +328,7 @@ git commit -m "refactor: share temporal pose observation builder"
 - Create: `tools/evaluate_fall_videos.py`
 - Create: `test/test_fall_video_evaluator.py`
 
-- [ ] **Step 1: Write failing evaluator tests**
+- [x] **Step 1: Write failing evaluator tests**
 
 Test pure functions:
 
@@ -336,7 +336,7 @@ Test pure functions:
 2. Timely alarm matching returns matched latency `0.2` for action start `3.0`, alarm `3.2`, and max delay `2.0`.
 3. An alarm at `6.0` is late and returns latency `3.0`.
 
-- [ ] **Step 2: Confirm evaluator RED**
+- [x] **Step 2: Confirm evaluator RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest test/test_fall_video_evaluator.py -q
@@ -344,7 +344,7 @@ Test pure functions:
 
 Expected: `ModuleNotFoundError: deidao.fall_video_evaluator`.
 
-- [ ] **Step 3: Implement pure evaluator helpers**
+- [x] **Step 3: Implement pure evaluator helpers**
 
 Create:
 
@@ -353,11 +353,11 @@ Create:
 | `crop_urfd_rgb(frame: np.ndarray) -> np.ndarray` | Return exactly the right half of a BGR frame without changing pixel values. |
 | `evaluate_alarm_times(alarm_times: Sequence[float], action_start_seconds: float | None, max_alarm_delay_seconds: float) -> dict` | Return matched status, matched alarm time, and latency; a later alarm is not matched. |
 
-- [ ] **Step 4: Confirm helper tests GREEN**
+- [x] **Step 4: Confirm helper tests GREEN**
 
 Run the focused evaluator tests. Expected: pure helper tests pass.
 
-- [ ] **Step 5: Implement headless `FallVideoEvaluator`**
+- [x] **Step 5: Implement headless `FallVideoEvaluator`**
 
 Class contract:
 
@@ -382,7 +382,7 @@ Implementation requirements:
 - Return unreadable media as a `VideoEvaluationResult` whose `read_error` field contains the exception message instead of crashing the run.
 - Close MediaPipe and capture in `finally`.
 
-- [ ] **Step 6: Implement evaluator CLI**
+- [x] **Step 6: Implement evaluator CLI**
 
 Command:
 
@@ -409,7 +409,7 @@ Output:
 
 Exit nonzero if the manifest is missing or every video failed.
 
-- [ ] **Step 7: Run evaluator and detector tests**
+- [x] **Step 7: Run evaluator and detector tests**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest test/test_fall_video_evaluator.py test/test_fall_engine.py -q
@@ -417,7 +417,7 @@ Exit nonzero if the manifest is missing or every video failed.
 
 Expected: all pass.
 
-- [ ] **Step 8: Commit Task 4**
+- [x] **Step 8: Commit Task 4**
 
 ```powershell
 git add deidao/fall_video_evaluator.py tools/evaluate_fall_videos.py test/test_fall_video_evaluator.py
