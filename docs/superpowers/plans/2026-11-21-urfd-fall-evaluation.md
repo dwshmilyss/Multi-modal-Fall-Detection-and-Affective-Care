@@ -273,7 +273,7 @@ git commit -m "feat: add URFD dataset downloader"
 - Modify: `deidao/detector.py`
 - Create: `test/test_pose_observation.py`
 
-- [ ] **Step 1: Write failing observation tests**
+- [x] **Step 1: Write failing observation tests**
 
 Create fake landmarks with `.x`, `.y`, and `.visibility`. Test:
 
@@ -281,7 +281,7 @@ Create fake landmarks with `.x`, `.y`, and `.visibility`. Test:
 2. A zero-size or invalid box returns `None`.
 3. Torso angle stays in `[0, 90]`.
 
-- [ ] **Step 2: Confirm pose builder RED**
+- [x] **Step 2: Confirm pose builder RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest test/test_pose_observation.py -q
@@ -289,7 +289,7 @@ Create fake landmarks with `.x`, `.y`, and `.visibility`. Test:
 
 Expected: `ModuleNotFoundError: deidao.pose_observation`.
 
-- [ ] **Step 3: Implement `build_pose_observation`**
+- [x] **Step 3: Implement `build_pose_observation`**
 
 Function contract:
 
@@ -297,15 +297,15 @@ Function contract:
 
 This helper must not import MediaPipe, Qt, YOLO, or OpenCV. It uses only standard-library math and accepts landmark indexes, allowing both the app and evaluator to use the exact same calculation.
 
-- [ ] **Step 4: Confirm pose builder GREEN**
+- [x] **Step 4: Confirm pose builder GREEN**
 
 Run `test/test_pose_observation.py`. Expected: focused tests pass.
 
-- [ ] **Step 5: Refactor `TemporalDetectionThread`**
+- [x] **Step 5: Refactor `TemporalDetectionThread`**
 
 Replace the inline shoulder/hip/angle/visibility/dictionary block in the temporal thread with a call to `build_pose_observation`. Keep drawing, missing-pose behavior, tracker behavior, alarm handling, and Qt signals unchanged.
 
-- [ ] **Step 6: Run detector regression tests**
+- [x] **Step 6: Run detector regression tests**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest test/test_pose_observation.py test/test_fall_engine.py -q
@@ -313,7 +313,7 @@ Replace the inline shoulder/hip/angle/visibility/dictionary block in the tempora
 
 Expected: all tests pass.
 
-- [ ] **Step 7: Commit Task 3**
+- [x] **Step 7: Commit Task 3**
 
 ```powershell
 git add deidao/pose_observation.py deidao/detector.py test/test_pose_observation.py
