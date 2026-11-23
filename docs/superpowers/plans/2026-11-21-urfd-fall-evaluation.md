@@ -37,7 +37,7 @@ All production code follows red-green-refactor: each task adds a failing test, c
 - Create: `test/test_fall_metrics.py`
 - Modify: `.gitignore`
 
-- [ ] **Step 1: Write failing annotation and manifest tests**
+- [x] **Step 1: Write failing annotation and manifest tests**
 
 Create tests that cover:
 
@@ -70,7 +70,7 @@ Expected manifest entry:
 }
 ```
 
-- [ ] **Step 2: Confirm Task 1 RED**
+- [x] **Step 2: Confirm Task 1 RED**
 
 Run:
 
@@ -80,7 +80,7 @@ Run:
 
 Expected failure: `ModuleNotFoundError: deidao.fall_metrics`.
 
-- [ ] **Step 3: Implement annotation and manifest parsing**
+- [x] **Step 3: Implement annotation and manifest parsing**
 
 Create these public APIs:
 
@@ -102,11 +102,11 @@ Implementation details:
 - Any ADL containing official label `0` or `1` uses `activity_group="low_posture_adl"`.
 - Include dataset metadata: `dataset="URFD"`, `camera="cam0"`, FPS, and official source URL.
 
-- [ ] **Step 4: Confirm Task 1 manifest tests pass**
+- [x] **Step 4: Confirm Task 1 manifest tests pass**
 
 Run the focused command again. Expected: all annotation and manifest tests pass.
 
-- [ ] **Step 5: Write failing result, metrics, and report tests**
+- [x] **Step 5: Write failing result, metrics, and report tests**
 
 Define expected result scenarios:
 
@@ -140,11 +140,11 @@ Also test that Markdown contains:
 - 全量 ADL、基础 ADL、低姿态 ADL explanations
 - explicit statement that `late_detected` is not counted as recall.
 
-- [ ] **Step 6: Confirm metrics/report RED**
+- [x] **Step 6: Confirm metrics/report RED**
 
 Run the focused test command. Expected failure: missing `VideoEvaluationResult`, `FallEvaluationReport`, `summarize_results`, or `render_markdown_report`.
 
-- [ ] **Step 7: Implement result model, classification, metrics, and report**
+- [x] **Step 7: Implement result model, classification, metrics, and report**
 
 Create the frozen dataclasses `VideoEvaluationResult` and `FallEvaluationReport` with exactly the fields listed in the tests. `VideoEvaluationResult` contains path, label, expected-alarm flag, alarm-time tuple, action start, maximum delay, activity group, frame count, FPS, detected-person-frame count, processing FPS, feature tuple, and optional read error. `FallEvaluationReport` contains dataset, camera, evaluated count, read errors, overall metrics, and group metrics.
 
@@ -175,7 +175,7 @@ Groups:
 
 Each group reports evaluated count, TP, late, FN, FP, TN, recall, precision, missed-alarm rate, false-alarm rate, and average timely alarm latency when available.
 
-- [ ] **Step 8: Confirm Task 1 GREEN**
+- [x] **Step 8: Confirm Task 1 GREEN**
 
 Run:
 
@@ -185,7 +185,7 @@ Run:
 
 Expected: all Task 1 tests pass.
 
-- [ ] **Step 9: Ignore generated data**
+- [x] **Step 9: Ignore generated data**
 
 Append to `.gitignore`:
 
@@ -196,7 +196,7 @@ urfall-cam0-falls.csv
 urfall-cam0-adls.csv
 ```
 
-- [ ] **Step 10: Commit Task 1**
+- [x] **Step 10: Commit Task 1**
 
 ```powershell
 git add deidao/fall_metrics.py test/test_fall_metrics.py .gitignore
@@ -210,7 +210,7 @@ git commit -m "feat: add URFD fall evaluation metrics"
 - Create: `tools/download_urfd.py`
 - Create: `test/test_download_urfd.py`
 
-- [ ] **Step 1: Write failing downloader tests**
+- [x] **Step 1: Write failing downloader tests**
 
 Cover:
 
@@ -221,7 +221,7 @@ Cover:
 5. A failed item is recorded and other downloads continue.
 6. A manifest is generated after successful downloads.
 
-- [ ] **Step 2: Confirm downloader RED**
+- [x] **Step 2: Confirm downloader RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest test/test_download_urfd.py -q
@@ -229,7 +229,7 @@ Cover:
 
 Expected: `ModuleNotFoundError: tools.download_urfd`.
 
-- [ ] **Step 3: Implement downloader**
+- [x] **Step 3: Implement downloader**
 
 Public APIs:
 
@@ -254,11 +254,11 @@ Implementation requirements:
 - Build `manifest.json` with `build_urfd_manifest`.
 - CLI defaults to `test_videos/evaluation/urfd` and supports `--retries`, `--retry-delay-seconds`, and `--no-manifest`.
 
-- [ ] **Step 4: Confirm downloader GREEN**
+- [x] **Step 4: Confirm downloader GREEN**
 
 Run the focused downloader tests. Expected: all pass without network access; tests monkeypatch `_download_file`.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
 
 ```powershell
 git add tools/download_urfd.py test/test_download_urfd.py
@@ -273,7 +273,7 @@ git commit -m "feat: add URFD dataset downloader"
 - Modify: `deidao/detector.py`
 - Create: `test/test_pose_observation.py`
 
-- [ ] **Step 1: Write failing observation tests**
+- [x] **Step 1: Write failing observation tests**
 
 Create fake landmarks with `.x`, `.y`, and `.visibility`. Test:
 
@@ -281,7 +281,7 @@ Create fake landmarks with `.x`, `.y`, and `.visibility`. Test:
 2. A zero-size or invalid box returns `None`.
 3. Torso angle stays in `[0, 90]`.
 
-- [ ] **Step 2: Confirm pose builder RED**
+- [x] **Step 2: Confirm pose builder RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest test/test_pose_observation.py -q
@@ -289,7 +289,7 @@ Create fake landmarks with `.x`, `.y`, and `.visibility`. Test:
 
 Expected: `ModuleNotFoundError: deidao.pose_observation`.
 
-- [ ] **Step 3: Implement `build_pose_observation`**
+- [x] **Step 3: Implement `build_pose_observation`**
 
 Function contract:
 
@@ -297,15 +297,15 @@ Function contract:
 
 This helper must not import MediaPipe, Qt, YOLO, or OpenCV. It uses only standard-library math and accepts landmark indexes, allowing both the app and evaluator to use the exact same calculation.
 
-- [ ] **Step 4: Confirm pose builder GREEN**
+- [x] **Step 4: Confirm pose builder GREEN**
 
 Run `test/test_pose_observation.py`. Expected: focused tests pass.
 
-- [ ] **Step 5: Refactor `TemporalDetectionThread`**
+- [x] **Step 5: Refactor `TemporalDetectionThread`**
 
 Replace the inline shoulder/hip/angle/visibility/dictionary block in the temporal thread with a call to `build_pose_observation`. Keep drawing, missing-pose behavior, tracker behavior, alarm handling, and Qt signals unchanged.
 
-- [ ] **Step 6: Run detector regression tests**
+- [x] **Step 6: Run detector regression tests**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest test/test_pose_observation.py test/test_fall_engine.py -q
@@ -313,7 +313,7 @@ Replace the inline shoulder/hip/angle/visibility/dictionary block in the tempora
 
 Expected: all tests pass.
 
-- [ ] **Step 7: Commit Task 3**
+- [x] **Step 7: Commit Task 3**
 
 ```powershell
 git add deidao/pose_observation.py deidao/detector.py test/test_pose_observation.py
@@ -328,7 +328,7 @@ git commit -m "refactor: share temporal pose observation builder"
 - Create: `tools/evaluate_fall_videos.py`
 - Create: `test/test_fall_video_evaluator.py`
 
-- [ ] **Step 1: Write failing evaluator tests**
+- [x] **Step 1: Write failing evaluator tests**
 
 Test pure functions:
 
@@ -336,7 +336,7 @@ Test pure functions:
 2. Timely alarm matching returns matched latency `0.2` for action start `3.0`, alarm `3.2`, and max delay `2.0`.
 3. An alarm at `6.0` is late and returns latency `3.0`.
 
-- [ ] **Step 2: Confirm evaluator RED**
+- [x] **Step 2: Confirm evaluator RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest test/test_fall_video_evaluator.py -q
@@ -344,7 +344,7 @@ Test pure functions:
 
 Expected: `ModuleNotFoundError: deidao.fall_video_evaluator`.
 
-- [ ] **Step 3: Implement pure evaluator helpers**
+- [x] **Step 3: Implement pure evaluator helpers**
 
 Create:
 
@@ -353,11 +353,11 @@ Create:
 | `crop_urfd_rgb(frame: np.ndarray) -> np.ndarray` | Return exactly the right half of a BGR frame without changing pixel values. |
 | `evaluate_alarm_times(alarm_times: Sequence[float], action_start_seconds: float | None, max_alarm_delay_seconds: float) -> dict` | Return matched status, matched alarm time, and latency; a later alarm is not matched. |
 
-- [ ] **Step 4: Confirm helper tests GREEN**
+- [x] **Step 4: Confirm helper tests GREEN**
 
 Run the focused evaluator tests. Expected: pure helper tests pass.
 
-- [ ] **Step 5: Implement headless `FallVideoEvaluator`**
+- [x] **Step 5: Implement headless `FallVideoEvaluator`**
 
 Class contract:
 
@@ -382,7 +382,7 @@ Implementation requirements:
 - Return unreadable media as a `VideoEvaluationResult` whose `read_error` field contains the exception message instead of crashing the run.
 - Close MediaPipe and capture in `finally`.
 
-- [ ] **Step 6: Implement evaluator CLI**
+- [x] **Step 6: Implement evaluator CLI**
 
 Command:
 
@@ -409,7 +409,7 @@ Output:
 
 Exit nonzero if the manifest is missing or every video failed.
 
-- [ ] **Step 7: Run evaluator and detector tests**
+- [x] **Step 7: Run evaluator and detector tests**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest test/test_fall_video_evaluator.py test/test_fall_engine.py -q
@@ -417,7 +417,7 @@ Exit nonzero if the manifest is missing or every video failed.
 
 Expected: all pass.
 
-- [ ] **Step 8: Commit Task 4**
+- [x] **Step 8: Commit Task 4**
 
 ```powershell
 git add deidao/fall_video_evaluator.py tools/evaluate_fall_videos.py test/test_fall_video_evaluator.py
@@ -432,7 +432,7 @@ git commit -m "feat: add offline fall video evaluator"
 - Create: `test/test_aggregate_evaluation.py`
 - Modify: `README.md`
 
-- [ ] **Step 1: Write failing aggregation test**
+- [x] **Step 1: Write failing aggregation test**
 
 Use fake fall and emotion JSON reports. Assert aggregate Markdown contains:
 
@@ -444,11 +444,11 @@ Use fake fall and emotion JSON reports. Assert aggregate Markdown contains:
 - non-commercial license and citation
 - non-medical statement
 
-- [ ] **Step 2: Confirm aggregator RED**
+- [x] **Step 2: Confirm aggregator RED**
 
 Expected module import failure.
 
-- [ ] **Step 3: Implement aggregator**
+- [x] **Step 3: Implement aggregator**
 
 API:
 
@@ -459,11 +459,11 @@ API:
 
 CLI supports `--fall-report`, optional `--emotion-report`, and `--output`. Missing emotion data is explicitly omitted, never invented.
 
-- [ ] **Step 4: Confirm aggregator GREEN**
+- [x] **Step 4: Confirm aggregator GREEN**
 
 Run the aggregation test. Expected: pass.
 
-- [ ] **Step 5: Update README**
+- [x] **Step 5: Update README**
 
 Add `算法评测证据中心（URFD）` with:
 
@@ -478,7 +478,7 @@ Add `算法评测证据中心（URFD）` with:
 - Non-medical statement.
 - Generated media and reports are ignored.
 
-- [ ] **Step 6: Run all focused tests**
+- [x] **Step 6: Run all focused tests**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest test/test_fall_metrics.py test/test_download_urfd.py test/test_pose_observation.py test/test_fall_video_evaluator.py test/test_aggregate_evaluation.py -q
@@ -486,7 +486,7 @@ Add `算法评测证据中心（URFD）` with:
 
 Expected: all focused tests pass.
 
-- [ ] **Step 7: Commit Task 5**
+- [x] **Step 7: Commit Task 5**
 
 ```powershell
 git add tools/aggregate_evaluation.py test/test_aggregate_evaluation.py README.md
@@ -499,7 +499,7 @@ git commit -m "docs: document URFD fall evaluation pipeline"
 
 - No intentional production changes unless a real defect is found.
 
-- [ ] **Step 1: Download full URFD cam0 data**
+- [x] **Step 1: Download full URFD cam0 data**
 
 ```powershell
 .\.venv\Scripts\python.exe tools\download_urfd.py --output test_videos\evaluation\urfd
@@ -513,7 +513,7 @@ Verify:
 - 70-entry manifest.
 - Generated files do not appear in Git status.
 
-- [ ] **Step 2: Run two-video smoke evaluation**
+- [x] **Step 2: Run two-video smoke evaluation**
 
 ```powershell
 .\.venv\Scripts\python.exe tools\evaluate_fall_videos.py --dataset test_videos\evaluation\urfd --output output\evaluation\fall-smoke --split-rgb --upscale 2.0 --limit 2
@@ -521,7 +521,7 @@ Verify:
 
 Verify JSON/Markdown creation, model loading, frame processing, tracker use, and event collection.
 
-- [ ] **Step 3: Fix real defects through TDD**
+- [x] **Step 3: Fix real defects through TDD**
 
 For any smoke defect:
 
@@ -531,7 +531,7 @@ For any smoke defect:
 4. Confirm focused pass.
 5. Re-run smoke.
 
-- [ ] **Step 4: Run all 70 videos**
+- [x] **Step 4: Run all 70 videos**
 
 ```powershell
 .\.venv\Scripts\python.exe tools\evaluate_fall_videos.py --dataset test_videos\evaluation\urfd --output output\evaluation\fall --split-rgb --upscale 2.0
@@ -539,11 +539,11 @@ For any smoke defect:
 
 Expected report groups: fall, all ADL, basic ADL, low-posture ADL. Late detections remain separate from recall.
 
-- [ ] **Step 5: Aggregate emotion report if available**
+- [x] **Step 5: Aggregate emotion report if available**
 
 Use `qingxu/output/benchmarks/emotion_model_benchmark.json` when it exists. Otherwise omit emotion metrics and state fall-only scope.
 
-- [ ] **Step 6: Run full test suite**
+- [x] **Step 6: Run full test suite**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest test -q -s
@@ -551,7 +551,7 @@ Use `qingxu/output/benchmarks/emotion_model_benchmark.json` when it exists. Othe
 
 Expected exit code 0.
 
-- [ ] **Step 7: Verify generated data is ignored**
+- [x] **Step 7: Verify generated data is ignored**
 
 ```powershell
 git status --short
@@ -559,7 +559,7 @@ git status --short
 
 Expected no URFD media, CSV, manifest, or evaluation output paths.
 
-- [ ] **Step 8: Commit real-defect fixes only**
+- [x] **Step 8: Commit real-defect fixes only**
 
 If Task 6 exposed a defect, inspect `git diff --name-only` and stage each modified path explicitly after review. Then run:
 

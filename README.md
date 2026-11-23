@@ -336,6 +336,57 @@ copy .env.example .env
 
 ---
 
+## 📊 算法评测证据中心（URFD）
+
+### 数据来源与样本
+
+评测使用官方 [UR Fall Detection Dataset](https://fenix.ur.edu.pl/~mkepski/ds/uf.html)，只使用 `cam0` 视频，共选择 **70** 个样本；报告会同时区分选择/尝试评测数量与有效评测数量。
+
+| 分组 | 选择数量 | 用途 |
+| --- | ---: | --- |
+| fall | 30 | 跌倒视频，检查及时召回、延迟、漏报与误判 |
+| all_adl | 40 | 全量日常活动负样本，检查整体误报率 |
+| basic_adl | 24 | 官方 ADL 中未出现 0/1 低姿态标注的样本 |
+| low_posture_adl | 16 | 官方 ADL 中出现 0/1 低姿态标注的样本，仍然是负样本 |
+
+URFD 数据源许可为 **Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International**。引用要求：
+
+> Bogdan Kwolek and Michal Kepski, “Human fall detection on embedded platform using depth maps and wireless accelerometer,” Computer Methods and Programs in Biomedicine, Volume 117, Issue 3, December 2014, pages 489-501.
+
+下载数据集：
+
+```bash
+.\.venv\Scripts\python.exe tools\download_urfd.py --output test_videos\evaluation\urfd
+```
+
+如果官方服务器证书已过期或本机信任链不匹配，可在确认数据源 URL 后显式追加 `--insecure`。该参数会关闭证书校验，连接将暴露于篡改风险，只建议用于这个公开学术数据集。
+
+运行跌倒评测：
+
+```bash
+.\.venv\Scripts\python.exe tools\evaluate_fall_videos.py --dataset test_videos\evaluation\urfd --output output\evaluation\fall --split-rgb --upscale 2.0
+```
+
+汇总评测证据（`--emotion-report` 可省略）：
+
+```bash
+.\.venv\Scripts\python.exe tools\aggregate_evaluation.py --fall-report output\evaluation\fall\fall_evaluation.json --output output\evaluation\algorithm_evidence.md
+
+.\.venv\Scripts\python.exe tools\aggregate_evaluation.py --fall-report output\evaluation\fall\fall_evaluation.json --emotion-report qingxu\output\benchmarks\emotion_model_benchmark.json --output output\evaluation\algorithm_evidence.md
+```
+
+### 指标与原始视频约定
+
+- 原始 URFD 帧为 **depth 左半 / RGB 右半**；`--split-rgb` 只取右侧半幅作为 RGB 输入。
+- **及时检测**要求报警时间位于 `[action_start, action_start + max_alarm_delay_seconds]` 内。
+- **late_detected** 只记录超过延迟窗口的报警，作为延迟诊断，不计入召回率。
+- **基础 ADL** 是没有官方低姿态标注的日常活动；**低姿态 ADL** 是包含 0/1 低姿态标注的日常活动，但仍作为负样本参与误报统计。
+- 未提供情绪基准报告时，汇总报告明确写“情绪基准报告未提供”，并省略准确率、宏 F1、平均延迟和评测人脸数，不虚构缺失指标。
+
+> ⚠️ 本评测用于算法研究与工程验证，**不构成医疗诊断或医疗建议**，也不能替代人工监护和应急响应。数据集、原始媒体、评测报告与汇总报告只在本地生成；`test_videos/evaluation/` 与 `output/evaluation/` 已被 Git 忽略。
+
+---
+
 ## 🧭 后续可扩展方向
 
 - **加权打分机制**：给不同特征分配权重，总分超过阈值才报警（当前使用共识机制）

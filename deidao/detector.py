@@ -55,6 +55,10 @@ try:
     from .fall_engine import FallDetectionEngine, SimplePersonTracker
 except ImportError:
     from fall_engine import FallDetectionEngine, SimplePersonTracker
+try:
+    from .pose_observation import build_pose_observation
+except ImportError:
+    from pose_observation import build_pose_observation
 
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
@@ -670,45 +674,20 @@ class TemporalDetectionThread(LegacyDetectionThread):
                             mp_poz.POSE_CONNECTIONS,
                         )
                         landmarks = pose_result.pose_landmarks.landmark
-                        h_box, w_box, _ = kisi_bbox.shape
-
-                        shoulders = [
-                            (landmarks[mp_poz.PoseLandmark.LEFT_SHOULDER.value].x * w_box,
-                             landmarks[mp_poz.PoseLandmark.LEFT_SHOULDER.value].y * h_box),
-                            (landmarks[mp_poz.PoseLandmark.RIGHT_SHOULDER.value].x * w_box,
-                             landmarks[mp_poz.PoseLandmark.RIGHT_SHOULDER.value].y * h_box),
-                        ]
-                        hips = [
-                            (landmarks[mp_poz.PoseLandmark.LEFT_HIP.value].x * w_box,
-                             landmarks[mp_poz.PoseLandmark.LEFT_HIP.value].y * h_box),
-                            (landmarks[mp_poz.PoseLandmark.RIGHT_HIP.value].x * w_box,
-                             landmarks[mp_poz.PoseLandmark.RIGHT_HIP.value].y * h_box),
-                        ]
-                        shoulder_center = (
-                            (shoulders[0][0] + shoulders[1][0]) / 2.0,
-                            (shoulders[0][1] + shoulders[1][1]) / 2.0,
+                        observation = build_pose_observation(
+                            landmarks=landmarks,
+                            nose_index=mp_poz.PoseLandmark.NOSE.value,
+                            left_shoulder_index=mp_poz.PoseLandmark.LEFT_SHOULDER.value,
+                            right_shoulder_index=mp_poz.PoseLandmark.RIGHT_SHOULDER.value,
+                            left_hip_index=mp_poz.PoseLandmark.LEFT_HIP.value,
+                            right_hip_index=mp_poz.PoseLandmark.RIGHT_HIP.value,
+                            box=(x1, y1, x2, y2),
+                            timestamp=frame_timestamp,
                         )
-                        hip_center = (
-                            (hips[0][0] + hips[1][0]) / 2.0,
-                            (hips[0][1] + hips[1][1]) / 2.0,
-                        )
-                        key_indices = (
-                            mp_poz.PoseLandmark.NOSE.value,
-                            mp_poz.PoseLandmark.LEFT_SHOULDER.value,
-                            mp_poz.PoseLandmark.RIGHT_SHOULDER.value,
-                            mp_poz.PoseLandmark.LEFT_HIP.value,
-                            mp_poz.PoseLandmark.RIGHT_HIP.value,
-                        )
-                        visibility = sum(landmarks[index].visibility for index in key_indices) / len(key_indices)
-                        observation = {
-                            "timestamp": frame_timestamp,
-                            "torso_angle": float(aci_hesapla(hip_center, shoulder_center)),
-                            "hip_y": float(y1 + hip_center[1]),
-                            "nose_y": float(y1 + landmarks[mp_poz.PoseLandmark.NOSE.value].y * h_box),
-                            "bbox": (float(x1), float(y1), float(x2), float(y2)),
-                            "visibility": float(visibility),
-                        }
-                        result = engine.process(observation)
+                        if observation is None:
+                            result = engine.process({"timestamp": frame_timestamp, "visibility": 0.0})
+                        else:
+                            result = engine.process(observation)
 
                     current_durus = result.label
                     any_alarm_active = any_alarm_active or result.alarm_active
