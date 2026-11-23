@@ -1,5 +1,6 @@
 import json
 import os
+import ssl
 import sys
 from dataclasses import FrozenInstanceError, fields
 from http.client import HTTPException
@@ -40,7 +41,7 @@ def make_fake_downloader(monkeypatch, failures=None, errors=None):
     errors = dict(errors or {})
     calls = []
 
-    def fake_download_file(url, part_path):
+    def fake_download_file(url, part_path, verify_ssl=True):
         remote_name = url.removeprefix(URFD_BASE_URL)
         calls.append(remote_name)
         part_path.parent.mkdir(parents=True, exist_ok=True)
@@ -232,7 +233,7 @@ def test_download_uses_unique_staging_path_for_each_attempt(
 
     staging_paths = []
 
-    def fake_download_file(url, part_path):
+    def fake_download_file(url, part_path, verify_ssl=True):
         remote_name = url.removeprefix(URFD_BASE_URL)
         assert remote_name == "fall-01-cam0.mp4"
         staging_paths.append(part_path)
@@ -267,7 +268,7 @@ def test_download_records_final_failure_and_continues(tmp_path, monkeypatch):
     sleeps = []
     monkeypatch.setattr("tools.download_urfd.time.sleep", lambda seconds: sleeps.append(seconds))
 
-    def fail_all_attempts(url, part_path):
+    def fail_all_attempts(url, part_path, verify_ssl=True):
         remote_name = url.removeprefix(URFD_BASE_URL)
         calls.append(remote_name)
         if remote_name == "adl-03-cam0.mp4":
@@ -310,6 +311,49 @@ def test_download_file_rejects_empty_and_length_mismatched_responses(
         _download_file(urfd_file_url("fall-01-cam0.mp4"), stage_path)
     with pytest.raises(URLError, match="Content-Length mismatch"):
         _download_file(urfd_file_url("fall-02-cam0.mp4"), stage_path)
+
+
+def test_download_file_uses_certificate_verification_by_default(
+    tmp_path,
+    monkeypatch,
+):
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        calls.append((request, timeout))
+        return FakeHTTPResponse(b"body", content_length="4")
+
+    monkeypatch.setattr("tools.download_urfd.urllib.request.urlopen", fake_urlopen)
+
+    _download_file(urfd_file_url("fall-01-cam0.mp4"), tmp_path / ".body.part")
+
+    request, timeout = calls[0]
+    assert request.full_url == urfd_file_url("fall-01-cam0.mp4")
+    assert timeout == 60
+
+
+def test_download_file_insecure_uses_explicit_unverified_tls_context(
+    tmp_path,
+    monkeypatch,
+):
+    contexts = []
+
+    def fake_urlopen(request, timeout, context=None):
+        contexts.append(context)
+        return FakeHTTPResponse(b"body", content_length="4")
+
+    monkeypatch.setattr("tools.download_urfd.urllib.request.urlopen", fake_urlopen)
+
+    _download_file(
+        urfd_file_url("fall-01-cam0.mp4"),
+        tmp_path / ".body.part",
+        verify_ssl=False,
+    )
+
+    context = contexts[0]
+    assert context is not None
+    assert context.check_hostname is False
+    assert context.verify_mode == ssl.CERT_NONE
 
 
 def test_download_writes_manifest_after_all_items_succeed(tmp_path, monkeypatch):
@@ -374,15 +418,75 @@ def test_cli_defaults_and_options_are_official_dataset_settings():
     assert defaults.retries == 3
     assert defaults.retry_delay_seconds == 2.0
     assert defaults.create_manifest is True
+    assert defaults.verify_ssl is True
     assert enabled.output == "custom/urfd"
     assert enabled.retries == 5
     assert enabled.retry_delay_seconds == 0.25
     assert enabled.create_manifest is True
     assert disabled.create_manifest is False
+    assert parse_args(["--insecure"]).verify_ssl is False
+
+
+def test_download_urfd_propagates_ssl_verification_choice(tmp_path, monkeypatch):
+    calls = []
+
+    for item in build_download_plan(tmp_path):
+        if item.remote_name == "fall-01-cam0.mp4":
+            continue
+        item.local_path.parent.mkdir(parents=True, exist_ok=True)
+        item.local_path.write_bytes(b"already downloaded")
+
+    def spy_download_file(url, part_path, verify_ssl=True):
+        calls.append(verify_ssl)
+        part_path.write_bytes(b"downloaded")
+
+    monkeypatch.setattr("tools.download_urfd._download_file", spy_download_file)
+
+    download_urfd(
+        tmp_path,
+        retries=1,
+        retry_delay_seconds=0.0,
+        create_manifest=False,
+        verify_ssl=False,
+    )
+
+    assert calls == [False]
+
+
+def test_cli_warns_when_insecure_selected(monkeypatch, capsys):
+    def fake_download(
+        output_dir,
+        retries,
+        retry_delay_seconds,
+        create_manifest,
+        verify_ssl,
+    ):
+        assert verify_ssl is False
+        return {
+            "downloaded": 0,
+            "skipped": 72,
+            "failed": [],
+            "manifest": None,
+        }
+
+    monkeypatch.setattr("tools.download_urfd.download_urfd", fake_download)
+
+    exit_code = main(["--output", "custom/urfd", "--insecure", "--no-manifest"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Warning: certificate verification is disabled" in captured.err
+    assert "connection is vulnerable to tampering" in captured.err
 
 
 def test_cli_failure_returns_error_and_prints_summary(monkeypatch, capsys):
-    def fail_download(output_dir, retries, retry_delay_seconds, create_manifest):
+    def fail_download(
+        output_dir,
+        retries,
+        retry_delay_seconds,
+        create_manifest,
+        verify_ssl,
+    ):
         return {
             "downloaded": 2,
             "skipped": 3,

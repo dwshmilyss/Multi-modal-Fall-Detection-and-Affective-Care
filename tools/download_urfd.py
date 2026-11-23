@@ -5,6 +5,7 @@ import argparse
 import http.client
 import json
 import os
+import ssl
 import shutil
 import sys
 import tempfile
@@ -114,14 +115,26 @@ def _validate_staged_file(staging_path: Path, response) -> None:
         )
 
 
-def _download_file(url: str, part_path: Path) -> None:
+def _download_file(url: str, part_path: Path, verify_ssl: bool = True) -> None:
     """Copy a complete HTTP response to a staging file."""
 
     request = urllib.request.Request(
         url,
         headers={"User-Agent": "deidao-urfd-downloader/1.0"},
     )
-    with urllib.request.urlopen(request, timeout=60) as response:
+    if verify_ssl:
+        response_context = urllib.request.urlopen(request, timeout=60)
+    else:
+        insecure_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        insecure_context.check_hostname = False
+        insecure_context.verify_mode = ssl.CERT_NONE
+        response_context = urllib.request.urlopen(
+            request,
+            timeout=60,
+            context=insecure_context,
+        )
+
+    with response_context as response:
         if getattr(response, "status", 200) != 200:
             raise URLError(f"unexpected HTTP status {response.status}")
         with part_path.open("wb") as part_file:
@@ -156,6 +169,7 @@ def download_urfd(
     retries: int = 3,
     retry_delay_seconds: float = 2.0,
     create_manifest: bool = True,
+    verify_ssl: bool = True,
 ) -> dict:
     """Download each planned file independently, recording files that remain unavailable."""
 
@@ -185,7 +199,11 @@ def download_urfd(
             part_path = None
             try:
                 part_path = _create_staging_path(item.local_path)
-                _download_file(urfd_file_url(item.remote_name), part_path)
+                _download_file(
+                    urfd_file_url(item.remote_name),
+                    part_path,
+                    verify_ssl=verify_ssl,
+                )
                 part_path.replace(item.local_path)
                 downloaded += 1
                 break
@@ -230,16 +248,29 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         dest="create_manifest",
         help="do not write manifest.json",
     )
+    parser.add_argument(
+        "--insecure",
+        action="store_false",
+        dest="verify_ssl",
+        help="disable TLS certificate verification for the URFD download",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    if not args.verify_ssl:
+        print(
+            "Warning: certificate verification is disabled; "
+            "the connection is vulnerable to tampering.",
+            file=sys.stderr,
+        )
     result = download_urfd(
         args.output,
         retries=args.retries,
         retry_delay_seconds=args.retry_delay_seconds,
         create_manifest=args.create_manifest,
+        verify_ssl=args.verify_ssl,
     )
     print(
         f"Downloaded {result['downloaded']}; skipped {result['skipped']}; "

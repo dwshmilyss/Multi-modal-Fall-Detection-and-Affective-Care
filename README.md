@@ -359,6 +359,8 @@ URFD 数据源许可为 **Creative Commons Attribution-NonCommercial-ShareAlike 
 .\.venv\Scripts\python.exe tools\download_urfd.py --output test_videos\evaluation\urfd
 ```
 
+如果官方服务器证书已过期或本机信任链不匹配，可在确认数据源 URL 后显式追加 `--insecure`。该参数会关闭证书校验，连接将暴露于篡改风险，只建议用于这个公开学术数据集。
+
 运行跌倒评测：
 
 ```bash
