@@ -432,7 +432,7 @@ git commit -m "feat: add offline fall video evaluator"
 - Create: `test/test_aggregate_evaluation.py`
 - Modify: `README.md`
 
-- [ ] **Step 1: Write failing aggregation test**
+- [x] **Step 1: Write failing aggregation test**
 
 Use fake fall and emotion JSON reports. Assert aggregate Markdown contains:
 
@@ -444,11 +444,11 @@ Use fake fall and emotion JSON reports. Assert aggregate Markdown contains:
 - non-commercial license and citation
 - non-medical statement
 
-- [ ] **Step 2: Confirm aggregator RED**
+- [x] **Step 2: Confirm aggregator RED**
 
 Expected module import failure.
 
-- [ ] **Step 3: Implement aggregator**
+- [x] **Step 3: Implement aggregator**
 
 API:
 
@@ -459,11 +459,11 @@ API:
 
 CLI supports `--fall-report`, optional `--emotion-report`, and `--output`. Missing emotion data is explicitly omitted, never invented.
 
-- [ ] **Step 4: Confirm aggregator GREEN**
+- [x] **Step 4: Confirm aggregator GREEN**
 
 Run the aggregation test. Expected: pass.
 
-- [ ] **Step 5: Update README**
+- [x] **Step 5: Update README**
 
 Add `算法评测证据中心（URFD）` with:
 
@@ -478,7 +478,7 @@ Add `算法评测证据中心（URFD）` with:
 - Non-medical statement.
 - Generated media and reports are ignored.
 
-- [ ] **Step 6: Run all focused tests**
+- [x] **Step 6: Run all focused tests**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest test/test_fall_metrics.py test/test_download_urfd.py test/test_pose_observation.py test/test_fall_video_evaluator.py test/test_aggregate_evaluation.py -q
@@ -486,7 +486,7 @@ Add `算法评测证据中心（URFD）` with:
 
 Expected: all focused tests pass.
 
-- [ ] **Step 7: Commit Task 5**
+- [x] **Step 7: Commit Task 5**
 
 ```powershell
 git add tools/aggregate_evaluation.py test/test_aggregate_evaluation.py README.md
