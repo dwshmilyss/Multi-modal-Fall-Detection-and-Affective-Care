@@ -210,7 +210,7 @@ git commit -m "feat: add URFD fall evaluation metrics"
 - Create: `tools/download_urfd.py`
 - Create: `test/test_download_urfd.py`
 
-- [ ] **Step 1: Write failing downloader tests**
+- [x] **Step 1: Write failing downloader tests**
 
 Cover:
 
@@ -221,7 +221,7 @@ Cover:
 5. A failed item is recorded and other downloads continue.
 6. A manifest is generated after successful downloads.
 
-- [ ] **Step 2: Confirm downloader RED**
+- [x] **Step 2: Confirm downloader RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest test/test_download_urfd.py -q
@@ -229,7 +229,7 @@ Cover:
 
 Expected: `ModuleNotFoundError: tools.download_urfd`.
 
-- [ ] **Step 3: Implement downloader**
+- [x] **Step 3: Implement downloader**
 
 Public APIs:
 
@@ -254,11 +254,11 @@ Implementation requirements:
 - Build `manifest.json` with `build_urfd_manifest`.
 - CLI defaults to `test_videos/evaluation/urfd` and supports `--retries`, `--retry-delay-seconds`, and `--no-manifest`.
 
-- [ ] **Step 4: Confirm downloader GREEN**
+- [x] **Step 4: Confirm downloader GREEN**
 
 Run the focused downloader tests. Expected: all pass without network access; tests monkeypatch `_download_file`.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
 
 ```powershell
 git add tools/download_urfd.py test/test_download_urfd.py
