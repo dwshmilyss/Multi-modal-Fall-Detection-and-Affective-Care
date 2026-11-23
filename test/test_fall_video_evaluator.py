@@ -73,11 +73,11 @@ class FakePoseResult:
 
 class FakePose:
     PoseLandmark = SimpleNamespace(
-        NOSE=0,
-        LEFT_SHOULDER=1,
-        RIGHT_SHOULDER=2,
-        LEFT_HIP=3,
-        RIGHT_HIP=4,
+        NOSE=SimpleNamespace(value=0),
+        LEFT_SHOULDER=SimpleNamespace(value=1),
+        RIGHT_SHOULDER=SimpleNamespace(value=2),
+        LEFT_HIP=SimpleNamespace(value=3),
+        RIGHT_HIP=SimpleNamespace(value=4),
     )
 
     def __init__(self, landmarks_by_frame):
@@ -133,6 +133,47 @@ class BrokenCapture:
 
     def release(self):
         self.released = True
+
+
+class FailingModel:
+    def __call__(self, frame, device=None, verbose=False):
+        raise RuntimeError("model inference failed")
+
+
+class FailingPose:
+    PoseLandmark = FakePose.PoseLandmark
+
+    def process(self, image):
+        raise RuntimeError("pose inference failed")
+
+    def close(self):
+        pass
+
+
+class FailingReadCapture(FakeCapture):
+    def read(self):
+        raise RuntimeError("decoder failed")
+
+
+class ReleaseFailureCapture(FakeCapture):
+    def __init__(self, frames, fps=30.0):
+        super().__init__(frames, fps=fps)
+        self.release_failed = False
+
+    def release(self):
+        self.release_failed = True
+        raise RuntimeError("release failed")
+
+
+class CloseFailureResource:
+    PoseLandmark = FakePose.PoseLandmark
+
+    def __init__(self):
+        self.close_attempted = False
+
+    def close(self):
+        self.close_attempted = True
+        raise RuntimeError("close failed")
 
 
 def landmarks_for_observation(box, *, angle, hip_y, nose_y):
@@ -283,6 +324,31 @@ def test_evaluate_video_uses_frame_time_and_collects_one_alarm_event(monkeypatch
 
 def test_evaluate_video_crops_urfd_rgb_before_model_inference_and_upscales():
     model, pose, _ = make_fall_components(frame_count=1)
+    model.boxes_by_frame = [[(0.0, 0.0, 320.0, 240.0, 0)]]
+    frame = np.zeros((240, 640, 3), dtype=np.uint8)
+    frame[:, :320] = (255, 0, 0)
+    frame[:, 320:] = (0, 0, 255)
+    capture = FakeCapture([frame], fps=30.0)
+    evaluator = make_evaluator(model, pose, capture, split_rgb=True, upscale=1.0)
+
+    result = evaluator.evaluate_video(
+        "fall/fall-01-cam0.mp4",
+        label="fall",
+        should_alarm=True,
+        action_start_seconds=None,
+        max_alarm_delay_seconds=2.0,
+        activity_group="fall",
+    )
+
+    expected_right_half = frame[:, 320:]
+    assert model.frames[0].shape == (240, 320, 3)
+    assert np.array_equal(model.frames[0], expected_right_half)
+    assert np.all(pose.images[0] == (255, 0, 0))
+    assert result.read_error is None
+
+
+def test_evaluate_video_upscales_the_cropped_frame():
+    model, pose, _ = make_fall_components(frame_count=1)
     capture = FakeCapture([np.full((240, 640, 3), 7, dtype=np.uint8)], fps=30.0)
     evaluator = make_evaluator(model, pose, capture, split_rgb=True, upscale=2.0)
 
@@ -297,6 +363,83 @@ def test_evaluate_video_crops_urfd_rgb_before_model_inference_and_upscales():
 
     assert model.frames[0].shape == (480, 640, 3)
     assert result.read_error is None
+
+
+@pytest.mark.parametrize("failure", ["model", "pose"])
+def test_evaluate_video_propagates_processing_failures_without_read_error(failure):
+    model = FailingModel() if failure == "model" else FakeModel([[(10, 10, 60, 100, 0)]])
+    pose = FailingPose() if failure == "pose" else FakePose([None])
+    capture = FakeCapture([np.zeros((240, 320, 3), dtype=np.uint8)])
+    evaluator = make_evaluator(model, pose, capture, split_rgb=False)
+
+    with pytest.raises(RuntimeError, match=f"{failure} .* failed"):
+        evaluator.evaluate_video(
+            "fall/fall-01-cam0.mp4",
+            label="fall",
+            should_alarm=True,
+            action_start_seconds=None,
+            max_alarm_delay_seconds=2.0,
+            activity_group="fall",
+        )
+
+    assert capture.released
+
+
+def test_capture_release_failure_does_not_replace_a_prepared_result():
+    model, pose, _ = make_fall_components(frame_count=1)
+    capture = ReleaseFailureCapture([np.zeros((240, 320, 3), dtype=np.uint8)])
+    evaluator = make_evaluator(model, pose, capture, split_rgb=False)
+
+    result = evaluator.evaluate_video(
+        "adl/adl-01-cam0.mp4",
+        label="adl",
+        should_alarm=False,
+        action_start_seconds=None,
+        max_alarm_delay_seconds=2.0,
+        activity_group="basic_adl",
+    )
+
+    assert result.read_error is None
+    assert capture.release_failed
+
+
+def test_capture_release_failure_does_not_replace_a_processing_exception():
+    capture = ReleaseFailureCapture([np.zeros((240, 320, 3), dtype=np.uint8)])
+    evaluator = make_evaluator(
+        FailingModel(),
+        FakePose([None]),
+        capture,
+        split_rgb=False,
+    )
+
+    with pytest.raises(RuntimeError, match="model inference failed"):
+        evaluator.evaluate_video(
+            "fall/fall-01-cam0.mp4",
+            label="fall",
+            should_alarm=True,
+            action_start_seconds=None,
+            max_alarm_delay_seconds=2.0,
+            activity_group="fall",
+        )
+
+    assert capture.release_failed
+
+
+def test_close_attempts_model_and_pose_cleanup_independently():
+    model = CloseFailureResource()
+    pose = CloseFailureResource()
+    evaluator = FallVideoEvaluator(
+        model_path="fake-model.pt",
+        _model=model,
+        _pose=pose,
+        _capture_factory=lambda path: FakeCapture([]),
+        _torch_cuda_available=False,
+    )
+
+    evaluator.close()
+
+    assert model.close_attempted
+    assert pose.close_attempted
 
 
 def test_evaluate_video_counts_a_multi_person_frame_once_and_filters_boxes():
@@ -422,7 +565,7 @@ def test_evaluate_video_returns_read_error_and_releases_capture():
         activity_group="fall",
     )
 
-    assert result.read_error == "camera backend failed"
+    assert result.read_error == "video capture open failed: camera backend failed"
     assert result.frame_count == 0
     assert result.fps == 30.0
     assert result.alarm_times == ()
@@ -592,3 +735,218 @@ def test_cli_parse_args_exposes_all_evaluation_options():
     assert args.upscale == 2.5
     assert args.limit == 3
     assert args.only_label == "fall"
+
+
+def write_cli_dataset(tmp_path, entries):
+    dataset = tmp_path / "urfd"
+    for entry in entries:
+        video_path = dataset / entry["path"]
+        video_path.parent.mkdir(parents=True, exist_ok=True)
+        video_path.write_bytes(b"fake")
+    manifest = {
+        "dataset": "URFD",
+        "camera": "cam0",
+        "fps": 30.0,
+        "entries": entries,
+    }
+    (dataset / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return dataset
+
+
+def make_cli_result(path, **overrides):
+    values = {
+        "path": str(path),
+        "label": "fall",
+        "should_alarm": True,
+        "alarm_times": (),
+        "action_start_seconds": None,
+        "max_alarm_delay_seconds": 2.0,
+        "activity_group": "fall",
+        "frame_count": 1,
+        "fps": 30.0,
+        "detected_person_frame_count": 1,
+        "processing_fps": 10.0,
+        "features": (),
+        "read_error": None,
+    }
+    values.update(overrides)
+    return VideoEvaluationResult(**values)
+
+
+def standard_cli_entry(name, label="fall"):
+    activity_group = label if label == "fall" else "basic_adl"
+    return {
+        "path": f"{label}/{name}.mp4",
+        "label": label,
+        "should_alarm": label == "fall",
+        "action_start_seconds": None,
+        "max_alarm_delay_seconds": 2.0,
+        "activity_group": activity_group,
+    }
+
+
+def test_cli_applies_only_label_and_limit_before_evaluation(tmp_path):
+    cli = load_cli_module()
+    dataset = write_cli_dataset(
+        tmp_path,
+        [
+            standard_cli_entry("fall-01"),
+            standard_cli_entry("fall-02"),
+            standard_cli_entry("adl-01", label="adl"),
+        ],
+    )
+    evaluated_paths = []
+
+    class RecordingEvaluator:
+        def __init__(self, **kwargs):
+            self.closed = False
+
+        def evaluate_video(self, path, **kwargs):
+            evaluated_paths.append(str(path))
+            return make_cli_result(path, **kwargs)
+
+        def close(self):
+            self.closed = True
+
+    exit_code = cli.main(
+        [
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(tmp_path / "reports"),
+            "--only-label",
+            "fall",
+            "--limit",
+            "1",
+        ],
+        evaluator_factory=RecordingEvaluator,
+    )
+
+    assert exit_code == 0
+    assert evaluated_paths == [str(dataset / "fall" / "fall-01.mp4")]
+
+
+def test_cli_returns_nonzero_for_missing_manifest_without_loading_model(tmp_path):
+    cli = load_cli_module()
+
+    def failing_factory(**kwargs):
+        raise AssertionError("model must not load when the manifest is missing")
+
+    exit_code = cli.main(
+        ["--dataset", str(tmp_path / "missing"), "--output", str(tmp_path / "reports")],
+        evaluator_factory=failing_factory,
+    )
+
+    assert exit_code != 0
+
+
+def test_cli_returns_nonzero_when_no_entries_are_selected(tmp_path):
+    cli = load_cli_module()
+    dataset = write_cli_dataset(tmp_path, [standard_cli_entry("fall-01")])
+
+    def failing_factory(**kwargs):
+        raise AssertionError("model must not load when no entries are selected")
+
+    exit_code = cli.main(
+        [
+            "--dataset",
+            str(dataset),
+            "--only-label",
+            "adl",
+            "--output",
+            str(tmp_path / "reports"),
+        ],
+        evaluator_factory=failing_factory,
+    )
+
+    assert exit_code != 0
+
+
+def test_cli_returns_nonzero_when_every_video_fails_to_read(tmp_path):
+    cli = load_cli_module()
+    dataset = write_cli_dataset(tmp_path, [standard_cli_entry("fall-01")])
+
+    class FailingReadEvaluator:
+        def __init__(self, **kwargs):
+            self.closed = False
+
+        def evaluate_video(self, path, **kwargs):
+            return make_cli_result(path, read_error="decoder failed", **kwargs)
+
+        def close(self):
+            self.closed = True
+
+    output = tmp_path / "reports"
+    exit_code = cli.main(
+        ["--dataset", str(dataset), "--output", str(output)],
+        evaluator_factory=FailingReadEvaluator,
+    )
+
+    assert exit_code != 0
+    assert (output / "fall_evaluation.json").is_file()
+    assert (output / "fall_evaluation.md").is_file()
+
+
+def test_cli_returns_nonzero_for_a_processing_exception_and_closes_evaluator(tmp_path, capsys):
+    cli = load_cli_module()
+    dataset = write_cli_dataset(tmp_path, [standard_cli_entry("fall-01")])
+
+    class ProcessingFailureEvaluator:
+        def __init__(self, **kwargs):
+            self.closed = False
+
+        def evaluate_video(self, path, **kwargs):
+            raise RuntimeError("pose pipeline failed")
+
+        def close(self):
+            self.closed = True
+
+    evaluator = ProcessingFailureEvaluator()
+
+    def factory(**kwargs):
+        return evaluator
+
+    exit_code = cli.main(
+        ["--dataset", str(dataset), "--output", str(tmp_path / "reports")],
+        evaluator_factory=factory,
+    )
+
+    assert exit_code != 0
+    assert "Evaluation failed: pose pipeline failed" in capsys.readouterr().err
+    assert evaluator.closed
+
+
+def test_cli_continues_after_per_video_frame_read_failure(tmp_path):
+    cli = load_cli_module()
+    entries = [standard_cli_entry("broken"), standard_cli_entry("good")]
+    dataset = write_cli_dataset(tmp_path, entries)
+    model = FakeModel([[(10, 10, 60, 100, 0)]])
+    pose = FakePose([None])
+    captures = [
+        FailingReadCapture([], fps=30.0),
+        FakeCapture([np.zeros((240, 320, 3), dtype=np.uint8)], fps=30.0),
+    ]
+    evaluator = FallVideoEvaluator(
+        model_path="fake-model.pt",
+        _model=model,
+        _pose=pose,
+        _capture_factory=lambda video_path: captures.pop(0),
+        _torch_cuda_available=False,
+    )
+
+    def factory(**kwargs):
+        return evaluator
+
+    output = tmp_path / "reports"
+    exit_code = cli.main(
+        ["--dataset", str(dataset), "--output", str(output)],
+        evaluator_factory=factory,
+    )
+
+    assert exit_code == 0
+    payload = json.loads((output / "fall_evaluation.json").read_text(encoding="utf-8"))
+    assert payload["read_errors"] == [
+        f"{dataset / 'fall' / 'broken.mp4'}: video frame read failed: decoder failed"
+    ]
+    assert len(model.frames) == 1
+    assert len(pose.images) == 1

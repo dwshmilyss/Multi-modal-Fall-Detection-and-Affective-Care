@@ -139,8 +139,14 @@ def main(
             results.append(result)
             if result.read_error is not None:
                 print(f"Read failed for {result.path}: {result.read_error}", file=sys.stderr)
+    except Exception as error:
+        print(f"Evaluation failed: {error}", file=sys.stderr)
+        return 1
     finally:
-        evaluator.close()
+        try:
+            evaluator.close()
+        except Exception as cleanup_error:
+            print(f"Evaluator cleanup failed: {cleanup_error}", file=sys.stderr)
 
     report = summarize_results(results)
     _write_reports(Path(args.output), report, manifest, results)

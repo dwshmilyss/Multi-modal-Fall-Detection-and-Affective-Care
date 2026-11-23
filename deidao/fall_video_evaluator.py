@@ -102,6 +102,8 @@ class FallVideoEvaluator:
         try:
             self._model = _model if _model is not None else self._load_yolo()
             self._pose = _pose if _pose is not None else self._load_pose()
+            if _pose is not None:
+                self._pose_indices = self._extract_pose_indices(_pose.PoseLandmark)
         except Exception:
             if _model is None and getattr(self, "_model", None) is not None:
                 self._close_if_present(self._model)
@@ -115,7 +117,10 @@ class FallVideoEvaluator:
     def _close_if_present(resource) -> None:
         close = getattr(resource, "close", None)
         if callable(close):
-            close()
+            try:
+                close()
+            except Exception:
+                pass
 
     @staticmethod
     def _resolve_device(device: str, cuda_available: Optional[bool]) -> str:
@@ -138,13 +143,7 @@ class FallVideoEvaluator:
         import mediapipe as mp
 
         pose_module = mp.solutions.pose
-        self._pose_indices = {
-            "nose": pose_module.PoseLandmark.NOSE.value,
-            "left_shoulder": pose_module.PoseLandmark.LEFT_SHOULDER.value,
-            "right_shoulder": pose_module.PoseLandmark.RIGHT_SHOULDER.value,
-            "left_hip": pose_module.PoseLandmark.LEFT_HIP.value,
-            "right_hip": pose_module.PoseLandmark.RIGHT_HIP.value,
-        }
+        self._pose_indices = self._extract_pose_indices(pose_module.PoseLandmark)
         return pose_module.Pose(
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5,
@@ -185,8 +184,24 @@ class FallVideoEvaluator:
         started_at = perf_counter()
 
         try:
-            capture = self._capture_factory(str(video_path))
-            if not capture.isOpened():
+            try:
+                capture = self._capture_factory(str(video_path))
+                opened = capture.isOpened()
+            except Exception as error:
+                return self._error_result(
+                    video_path,
+                    label,
+                    should_alarm,
+                    action_start_seconds,
+                    max_alarm_delay_seconds,
+                    activity_group,
+                    frame_index,
+                    fps,
+                    started_at,
+                    f"video capture open failed: {error}",
+                )
+
+            if not opened:
                 return self._error_result(
                     video_path,
                     label,
@@ -200,16 +215,55 @@ class FallVideoEvaluator:
                     "video capture did not open",
                 )
 
-            reported_fps = float(capture.get(cv2.CAP_PROP_FPS))
-            if math.isfinite(reported_fps) and reported_fps > 0.0:
-                fps = reported_fps
+            try:
+                reported_fps = float(capture.get(cv2.CAP_PROP_FPS))
+                if math.isfinite(reported_fps) and reported_fps > 0.0:
+                    fps = reported_fps
+            except Exception as error:
+                return self._error_result(
+                    video_path,
+                    label,
+                    should_alarm,
+                    action_start_seconds,
+                    max_alarm_delay_seconds,
+                    activity_group,
+                    frame_index,
+                    fps,
+                    started_at,
+                    f"video metadata read failed: {error}",
+                )
 
             while True:
-                read_ok, frame = capture.read()
+                try:
+                    read_ok, frame = capture.read()
+                except Exception as error:
+                    return self._error_result(
+                        video_path,
+                        label,
+                        should_alarm,
+                        action_start_seconds,
+                        max_alarm_delay_seconds,
+                        activity_group,
+                        frame_index,
+                        fps,
+                        started_at,
+                        f"video frame read failed: {error}",
+                    )
                 if not read_ok:
                     break
                 if frame is None:
-                    raise ValueError("video decoder returned an empty frame")
+                    return self._error_result(
+                        video_path,
+                        label,
+                        should_alarm,
+                        action_start_seconds,
+                        max_alarm_delay_seconds,
+                        activity_group,
+                        frame_index,
+                        fps,
+                        started_at,
+                        "video frame read failed: decoder returned an empty frame",
+                    )
 
                 timestamp = frame_index / fps
                 prepared_frame = self._prepare_frame(frame)
@@ -271,22 +325,12 @@ class FallVideoEvaluator:
                 features=tuple(feature_names),
                 read_error=None,
             )
-        except Exception as error:
-            return self._error_result(
-                video_path,
-                label,
-                should_alarm,
-                action_start_seconds,
-                max_alarm_delay_seconds,
-                activity_group,
-                frame_index,
-                fps,
-                started_at,
-                str(error),
-            )
         finally:
             if capture is not None:
-                capture.release()
+                try:
+                    capture.release()
+                except Exception:
+                    pass
             engines.clear()
 
     def _prepare_frame(self, frame: np.ndarray) -> np.ndarray:
@@ -327,7 +371,9 @@ class FallVideoEvaluator:
         if not pose_result.pose_landmarks:
             return engine.process({"timestamp": timestamp, "visibility": 0.0})
 
-        indices = self._pose_indices or self._fake_pose_indices()
+        indices = self._pose_indices
+        if indices is None:
+            raise RuntimeError("MediaPipe pose landmark indices are unavailable")
         observation = build_pose_observation(
             landmarks=pose_result.pose_landmarks.landmark,
             nose_index=indices["nose"],
@@ -342,14 +388,17 @@ class FallVideoEvaluator:
             return engine.process({"timestamp": timestamp, "visibility": 0.0})
         return engine.process(observation)
 
-    def _fake_pose_indices(self) -> dict:
-        landmarks = self._pose.PoseLandmark
+    @staticmethod
+    def _extract_pose_indices(landmarks) -> dict:
+        def index(landmark):
+            return int(getattr(landmark, "value", landmark))
+
         return {
-            "nose": landmarks.NOSE,
-            "left_shoulder": landmarks.LEFT_SHOULDER,
-            "right_shoulder": landmarks.RIGHT_SHOULDER,
-            "left_hip": landmarks.LEFT_HIP,
-            "right_hip": landmarks.RIGHT_HIP,
+            "nose": index(landmarks.NOSE),
+            "left_shoulder": index(landmarks.LEFT_SHOULDER),
+            "right_shoulder": index(landmarks.RIGHT_SHOULDER),
+            "left_hip": index(landmarks.LEFT_HIP),
+            "right_hip": index(landmarks.RIGHT_HIP),
         }
 
     @staticmethod
