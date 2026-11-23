@@ -340,9 +340,9 @@ copy .env.example .env
 
 ### 数据来源与样本
 
-评测使用官方 [UR Fall Detection Dataset](https://fenix.ur.edu.pl/~mkepski/ds/uf.html)，只使用 `cam0` 视频，共 **70** 个样本：
+评测使用官方 [UR Fall Detection Dataset](https://fenix.ur.edu.pl/~mkepski/ds/uf.html)，只使用 `cam0` 视频，共选择 **70** 个样本；报告会同时区分选择/尝试评测数量与有效评测数量。
 
-| 分组 | 数量 | 用途 |
+| 分组 | 选择数量 | 用途 |
 | --- | ---: | --- |
 | fall | 30 | 跌倒视频，检查及时召回、延迟、漏报与误判 |
 | all_adl | 40 | 全量日常活动负样本，检查整体误报率 |

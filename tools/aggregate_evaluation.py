@@ -2,7 +2,9 @@
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -43,9 +45,24 @@ def _format_metric(value, *, percent: bool = False, seconds: bool = False) -> st
     return str(value)
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    descriptor, staging_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".part",
+        dir=path.parent,
+    )
+    os.close(descriptor)
+    staging_path = Path(staging_name)
+    try:
+        staging_path.write_text(text, encoding="utf-8")
+        staging_path.replace(path)
+    finally:
+        staging_path.unlink(missing_ok=True)
+
+
 def _fall_metrics_table(report: dict) -> list[str]:
     lines = [
-        "| 分组 | 评测数 | missing_ground_truth | TP | late_detected | FN | FP | TN | "
+        "| 分组 | 有效评测数 | missing_ground_truth | TP | late_detected | FN | FP | TN | "
         "召回率 | 精确率 | 漏报率 | 误报率 | 平均及时延迟 |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
@@ -115,6 +132,8 @@ def render_aggregate_markdown(
 
     overall = fall_report["overall_metrics"]
     groups = fall_report["group_metrics"]
+    results = fall_report.get("results", [])
+    selected_count = fall_report.get("selected_count", len(results))
     fall_metrics = groups["fall"]
     timely_fall_count = fall_metrics["tp"] + fall_metrics["fn"]
     adl_metrics = groups["all_adl"]
@@ -125,11 +144,12 @@ def render_aggregate_markdown(
         "",
         f"- 数据集：[UR Fall Detection Dataset]({URFD_SOURCE_URL})",
         f"- 相机：{fall_report['camera']}；原始 URFD 视频为 depth 左半 / RGB 右半，评测使用右半 RGB。",
-        f"- URFD 样本总数：{fall_report['evaluated_count']}",
-        f"- 跌倒样本：{fall_metrics['evaluated_count']}",
-        f"- 全量 ADL 样本：{adl_metrics['evaluated_count']}",
-        f"- 基础 ADL 样本：{groups['basic_adl']['evaluated_count']}",
-        f"- 低姿态 ADL 样本：{groups['low_posture_adl']['evaluated_count']}",
+        f"- URFD 选择/尝试评测视频：{selected_count}",
+        f"- URFD 有效评测视频：{fall_report['evaluated_count']}",
+        f"- fall 有效评测样本：{fall_metrics['evaluated_count']}",
+        f"- all_adl 有效评测样本：{adl_metrics['evaluated_count']}",
+        f"- basic_adl 有效评测样本：{groups['basic_adl']['evaluated_count']}",
+        f"- low_posture_adl 有效评测样本：{groups['low_posture_adl']['evaluated_count']}",
         f"- 读取失败：{len(fall_report['read_errors'])}",
         "",
         "## 跌倒检测证据",
@@ -173,7 +193,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     markdown = render_aggregate_markdown(args.fall_report, args.emotion_report)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(markdown, encoding="utf-8")
+    _atomic_write_text(output_path, markdown)
     print(f"Aggregate evidence written to {output_path.resolve()}")
     return 0
 
