@@ -499,7 +499,7 @@ git commit -m "docs: document URFD fall evaluation pipeline"
 
 - No intentional production changes unless a real defect is found.
 
-- [ ] **Step 1: Download full URFD cam0 data**
+- [x] **Step 1: Download full URFD cam0 data**
 
 ```powershell
 .\.venv\Scripts\python.exe tools\download_urfd.py --output test_videos\evaluation\urfd
@@ -513,7 +513,7 @@ Verify:
 - 70-entry manifest.
 - Generated files do not appear in Git status.
 
-- [ ] **Step 2: Run two-video smoke evaluation**
+- [x] **Step 2: Run two-video smoke evaluation**
 
 ```powershell
 .\.venv\Scripts\python.exe tools\evaluate_fall_videos.py --dataset test_videos\evaluation\urfd --output output\evaluation\fall-smoke --split-rgb --upscale 2.0 --limit 2
@@ -521,7 +521,7 @@ Verify:
 
 Verify JSON/Markdown creation, model loading, frame processing, tracker use, and event collection.
 
-- [ ] **Step 3: Fix real defects through TDD**
+- [x] **Step 3: Fix real defects through TDD**
 
 For any smoke defect:
 
@@ -531,7 +531,7 @@ For any smoke defect:
 4. Confirm focused pass.
 5. Re-run smoke.
 
-- [ ] **Step 4: Run all 70 videos**
+- [x] **Step 4: Run all 70 videos**
 
 ```powershell
 .\.venv\Scripts\python.exe tools\evaluate_fall_videos.py --dataset test_videos\evaluation\urfd --output output\evaluation\fall --split-rgb --upscale 2.0
@@ -539,11 +539,11 @@ For any smoke defect:
 
 Expected report groups: fall, all ADL, basic ADL, low-posture ADL. Late detections remain separate from recall.
 
-- [ ] **Step 5: Aggregate emotion report if available**
+- [x] **Step 5: Aggregate emotion report if available**
 
 Use `qingxu/output/benchmarks/emotion_model_benchmark.json` when it exists. Otherwise omit emotion metrics and state fall-only scope.
 
-- [ ] **Step 6: Run full test suite**
+- [x] **Step 6: Run full test suite**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest test -q -s
@@ -551,7 +551,7 @@ Use `qingxu/output/benchmarks/emotion_model_benchmark.json` when it exists. Othe
 
 Expected exit code 0.
 
-- [ ] **Step 7: Verify generated data is ignored**
+- [x] **Step 7: Verify generated data is ignored**
 
 ```powershell
 git status --short
@@ -559,7 +559,7 @@ git status --short
 
 Expected no URFD media, CSV, manifest, or evaluation output paths.
 
-- [ ] **Step 8: Commit real-defect fixes only**
+- [x] **Step 8: Commit real-defect fixes only**
 
 If Task 6 exposed a defect, inspect `git diff --name-only` and stage each modified path explicitly after review. Then run:
 
