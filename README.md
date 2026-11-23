@@ -346,8 +346,8 @@ copy .env.example .env
 | --- | ---: | --- |
 | fall | 30 | 跌倒视频，检查及时召回、延迟、漏报与误判 |
 | all_adl | 40 | 全量日常活动负样本，检查整体误报率 |
-| basic_adl | 30 | 官方 ADL 中未出现 0/1 低姿态标注的样本 |
-| low_posture_adl | 10 | 官方 ADL 中出现 0/1 低姿态标注的样本，仍然是负样本 |
+| basic_adl | 24 | 官方 ADL 中未出现 0/1 低姿态标注的样本 |
+| low_posture_adl | 16 | 官方 ADL 中出现 0/1 低姿态标注的样本，仍然是负样本 |
 
 URFD 数据源许可为 **Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International**。引用要求：
 

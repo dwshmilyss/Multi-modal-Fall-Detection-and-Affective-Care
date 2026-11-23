@@ -10,6 +10,7 @@ import shutil
 import sys
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,7 @@ from deidao.fall_metrics import build_urfd_manifest
 
 
 URFD_BASE_URL = "https://fenix.ur.edu.pl/~mkepski/ds/data/"
+URFD_DOWNLOAD_HOST = urllib.parse.urlparse(URFD_BASE_URL).hostname
 ANNOTATION_FILES = (
     "urfall-cam0-falls.csv",
     "urfall-cam0-adls.csv",
@@ -115,6 +117,18 @@ def _validate_staged_file(staging_path: Path, response) -> None:
         )
 
 
+class URFDRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects that weaken the official URFD download source."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected_url = urllib.parse.urlparse(newurl)
+        if redirected_url.scheme.lower() != "https":
+            raise URLError(f"refusing non-HTTPS URFD redirect: {newurl}")
+        if redirected_url.hostname != URFD_DOWNLOAD_HOST:
+            raise URLError(f"refusing cross-host URFD redirect: {newurl}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _download_file(url: str, part_path: Path, verify_ssl: bool = True) -> None:
     """Copy a complete HTTP response to a staging file."""
 
@@ -123,18 +137,17 @@ def _download_file(url: str, part_path: Path, verify_ssl: bool = True) -> None:
         headers={"User-Agent": "deidao-urfd-downloader/1.0"},
     )
     if verify_ssl:
-        response_context = urllib.request.urlopen(request, timeout=60)
+        opener = urllib.request.build_opener(URFDRedirectHandler())
     else:
         insecure_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         insecure_context.check_hostname = False
         insecure_context.verify_mode = ssl.CERT_NONE
-        response_context = urllib.request.urlopen(
-            request,
-            timeout=60,
-            context=insecure_context,
+        opener = urllib.request.build_opener(
+            URFDRedirectHandler(),
+            urllib.request.HTTPSHandler(context=insecure_context),
         )
 
-    with response_context as response:
+    with opener.open(request, timeout=60) as response:
         if getattr(response, "status", 200) != 200:
             raise URLError(f"unexpected HTTP status {response.status}")
         with part_path.open("wb") as part_file:
@@ -173,6 +186,12 @@ def download_urfd(
 ) -> dict:
     """Download each planned file independently, recording files that remain unavailable."""
 
+    if not verify_ssl:
+        print(
+            "Warning: certificate verification is disabled; "
+            "the connection is vulnerable to tampering.",
+            file=sys.stderr,
+        )
     output_path = Path(output_dir).resolve()
     attempt_count = max(1, retries)
     delay_seconds = max(0.0, retry_delay_seconds)
@@ -259,12 +278,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    if not args.verify_ssl:
-        print(
-            "Warning: certificate verification is disabled; "
-            "the connection is vulnerable to tampering.",
-            file=sys.stderr,
-        )
     result = download_urfd(
         args.output,
         retries=args.retries,

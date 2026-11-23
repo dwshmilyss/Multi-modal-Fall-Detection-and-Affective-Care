@@ -2,6 +2,7 @@ import json
 import os
 import ssl
 import sys
+import urllib.request
 from dataclasses import FrozenInstanceError, fields
 from http.client import HTTPException
 from io import BytesIO
@@ -13,6 +14,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from deidao.fall_metrics import build_urfd_manifest
+import tools.download_urfd as download_urfd_module
 from tools.download_urfd import (
     URFD_BASE_URL,
     DownloadItem,
@@ -73,6 +75,19 @@ class FakeHTTPResponse:
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.body.close()
+
+
+def redirect_request(newurl):
+    request = urllib.request.Request(urfd_file_url("fall-01-cam0.mp4"))
+    handler = download_urfd_module.URFDRedirectHandler()
+    return handler.redirect_request(
+        request,
+        None,
+        301,
+        "Moved Permanently",
+        {},
+        newurl,
+    )
 
 
 def test_urfd_file_url_uses_official_data_base():
@@ -300,12 +315,15 @@ def test_download_file_rejects_empty_and_length_mismatched_responses(
 ):
     stage_path = tmp_path / ".response.part"
 
-    def fake_urlopen(request, timeout):
+    def fake_open(self, request, timeout):
         if request.full_url == urfd_file_url("fall-01-cam0.mp4"):
             return FakeHTTPResponse(b"", content_length=None)
         return FakeHTTPResponse(b"abc", content_length="4")
 
-    monkeypatch.setattr("tools.download_urfd.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        "tools.download_urfd.urllib.request.OpenerDirector.open",
+        fake_open,
+    )
 
     with pytest.raises(URLError, match="empty download"):
         _download_file(urfd_file_url("fall-01-cam0.mp4"), stage_path)
@@ -319,11 +337,14 @@ def test_download_file_uses_certificate_verification_by_default(
 ):
     calls = []
 
-    def fake_urlopen(request, timeout):
+    def fake_open(self, request, timeout):
         calls.append((request, timeout))
         return FakeHTTPResponse(b"body", content_length="4")
 
-    monkeypatch.setattr("tools.download_urfd.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        "tools.download_urfd.urllib.request.OpenerDirector.open",
+        fake_open,
+    )
 
     _download_file(urfd_file_url("fall-01-cam0.mp4"), tmp_path / ".body.part")
 
@@ -338,11 +359,22 @@ def test_download_file_insecure_uses_explicit_unverified_tls_context(
 ):
     contexts = []
 
-    def fake_urlopen(request, timeout, context=None):
-        contexts.append(context)
-        return FakeHTTPResponse(b"body", content_length="4")
+    class FakeOpener:
+        def open(self, request, timeout):
+            return FakeHTTPResponse(b"body", content_length="4")
 
-    monkeypatch.setattr("tools.download_urfd.urllib.request.urlopen", fake_urlopen)
+    def fake_build_opener(*handlers):
+        contexts.extend(
+            handler._context
+            for handler in handlers
+            if isinstance(handler, urllib.request.HTTPSHandler)
+        )
+        return FakeOpener()
+
+    monkeypatch.setattr(
+        "tools.download_urfd.urllib.request.build_opener",
+        fake_build_opener,
+    )
 
     _download_file(
         urfd_file_url("fall-01-cam0.mp4"),
@@ -354,6 +386,55 @@ def test_download_file_insecure_uses_explicit_unverified_tls_context(
     assert context is not None
     assert context.check_hostname is False
     assert context.verify_mode == ssl.CERT_NONE
+
+
+def test_download_file_builds_opener_with_redirect_handler(tmp_path, monkeypatch):
+    handler_types = []
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            return FakeHTTPResponse(b"body", content_length="4")
+
+    def fake_build_opener(*handlers):
+        handler_types.extend(type(handler) for handler in handlers)
+        return FakeOpener()
+
+    monkeypatch.setattr(
+        "tools.download_urfd.urllib.request.build_opener",
+        fake_build_opener,
+    )
+    monkeypatch.setattr(
+        "tools.download_urfd.urllib.request.urlopen",
+        lambda *args, **kwargs: pytest.fail("urlopen must not bypass the URFD opener"),
+    )
+
+    _download_file(
+        urfd_file_url("fall-01-cam0.mp4"),
+        tmp_path / ".redirect.part",
+    )
+
+    assert download_urfd_module.URFDRedirectHandler in handler_types
+
+
+def test_redirect_handler_rejects_http_downgrade():
+    with pytest.raises(URLError, match="non-HTTPS URFD redirect"):
+        redirect_request("http://fenix.ur.edu.pl/~mkepski/ds/data/fall-01-cam0.mp4")
+
+
+def test_redirect_handler_rejects_cross_host_redirect():
+    with pytest.raises(URLError, match="cross-host URFD redirect"):
+        redirect_request("https://example.com/fall-01-cam0.mp4")
+
+
+def test_redirect_handler_allows_same_host_https_redirect():
+    redirected = redirect_request(
+        "https://fenix.ur.edu.pl/~mkepski/ds/data/fall-01-cam0.mp4?token=1"
+    )
+
+    assert isinstance(redirected, urllib.request.Request)
+    assert redirected.full_url == (
+        "https://fenix.ur.edu.pl/~mkepski/ds/data/fall-01-cam0.mp4?token=1"
+    )
 
 
 def test_download_writes_manifest_after_all_items_succeed(tmp_path, monkeypatch):
@@ -453,30 +534,87 @@ def test_download_urfd_propagates_ssl_verification_choice(tmp_path, monkeypatch)
     assert calls == [False]
 
 
-def test_cli_warns_when_insecure_selected(monkeypatch, capsys):
-    def fake_download(
-        output_dir,
-        retries,
-        retry_delay_seconds,
-        create_manifest,
-        verify_ssl,
-    ):
-        assert verify_ssl is False
-        return {
-            "downloaded": 0,
-            "skipped": 72,
-            "failed": [],
-            "manifest": None,
-        }
+def test_download_urfd_warns_once_for_direct_insecure_api_use(capsys, tmp_path):
+    for item in build_download_plan(tmp_path):
+        item.local_path.parent.mkdir(parents=True, exist_ok=True)
+        item.local_path.write_bytes(b"already downloaded")
 
-    monkeypatch.setattr("tools.download_urfd.download_urfd", fake_download)
+    result = download_urfd(
+        tmp_path,
+        retries=1,
+        retry_delay_seconds=0.0,
+        create_manifest=False,
+        verify_ssl=False,
+    )
 
-    exit_code = main(["--output", "custom/urfd", "--insecure", "--no-manifest"])
+    captured = capsys.readouterr()
+    assert result["failed"] == []
+    assert captured.err.count(
+        "Warning: certificate verification is disabled; "
+        "the connection is vulnerable to tampering."
+    ) == 1
+
+
+def test_cli_warns_when_insecure_selected(tmp_path, capsys):
+    for item in build_download_plan(tmp_path):
+        item.local_path.parent.mkdir(parents=True, exist_ok=True)
+        item.local_path.write_bytes(b"already downloaded")
+
+    exit_code = main(
+        ["--output", str(tmp_path), "--insecure", "--no-manifest"]
+    )
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "Warning: certificate verification is disabled" in captured.err
-    assert "connection is vulnerable to tampering" in captured.err
+    assert captured.err.count(
+        "Warning: certificate verification is disabled; "
+        "the connection is vulnerable to tampering."
+    ) == 1
+
+
+def test_cli_records_retried_redirect_rejection_without_traceback(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    for item in build_download_plan(tmp_path):
+        if item.remote_name == "fall-01-cam0.mp4":
+            continue
+        item.local_path.parent.mkdir(parents=True, exist_ok=True)
+        item.local_path.write_bytes(b"already downloaded")
+
+    def reject_redirect(url, part_path, verify_ssl=True):
+        redirect_request("http://fenix.ur.edu.pl/fall-01-cam0.mp4")
+
+    monkeypatch.setattr("tools.download_urfd._download_file", reject_redirect)
+    monkeypatch.setattr(
+        "tools.download_urfd.time.sleep",
+        lambda seconds: None,
+    )
+
+    exit_code = main(
+        [
+            "--output",
+            str(tmp_path),
+            "--retries",
+            "2",
+            "--no-manifest",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Failed after 2 attempts: fall-01-cam0.mp4" in captured.err
+    assert "non-HTTPS URFD redirect" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_readme_documents_official_adl_group_counts():
+    readme = Path(__file__).resolve().parent.parent / "README.md"
+    content = readme.read_text(encoding="utf-8")
+
+    assert "| basic_adl | 24 |" in content
+    assert "| low_posture_adl | 16 |" in content
 
 
 def test_cli_failure_returns_error_and_prints_summary(monkeypatch, capsys):
