@@ -40,8 +40,8 @@ def build_pose_observation(
         (left_hip.y * box_height + right_hip.y * box_height) / 2.0,
     )
     angle = abs(90.0 - math.degrees(math.atan2(
-        hip_center[1] - shoulder_center[1],
-        hip_center[0] - shoulder_center[0],
+        shoulder_center[1] - hip_center[1],
+        shoulder_center[0] - hip_center[0],
     )))
     angle = max(0.0, min(90.0, angle))
 

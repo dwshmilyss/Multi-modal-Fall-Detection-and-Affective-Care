@@ -52,7 +52,7 @@ def test_valid_pose_becomes_temporal_engine_observation():
 
     assert observation is not None
     assert observation["timestamp"] == 12.5
-    assert observation["torso_angle"] == pytest.approx(0.0)
+    assert observation["torso_angle"] == pytest.approx(90.0)
     assert observation["hip_y"] == pytest.approx(310.0)
     assert observation["nose_y"] == pytest.approx(98.0)
     assert observation["bbox"] == (100.0, 50.0, 240.0, 450.0)
@@ -116,6 +116,56 @@ def test_torso_angle_stays_within_right_angle(shoulder_y, hip_y):
     angle = observation["torso_angle"]
     assert 0.0 <= angle <= 90.0
     assert math.isfinite(angle)
+
+
+def test_torso_angle_matches_temporal_formula():
+    upright = make_landmarks(
+        nose=(0.50, 0.20, 1.0),
+        left_shoulder=(0.25, 0.30, 1.0),
+        right_shoulder=(0.75, 0.30, 1.0),
+        left_hip=(0.25, 0.65, 1.0),
+        right_hip=(0.75, 0.65, 1.0),
+    )
+    upright_observation = build_pose_observation(
+        landmarks=upright,
+        nose_index=0,
+        left_shoulder_index=1,
+        right_shoulder_index=2,
+        left_hip_index=3,
+        right_hip_index=4,
+        box=BOX,
+        timestamp=0.0,
+    )
+
+    assert upright_observation is not None
+    assert upright_observation["torso_angle"] == 90.0
+
+    slanted = make_landmarks(
+        nose=(0.60, 0.15, 1.0),
+        left_shoulder=(0.40, 0.50, 1.0),
+        right_shoulder=(0.90, 0.70, 1.0),
+        left_hip=(0.10, 0.20, 1.0),
+        right_hip=(0.60, 0.40, 1.0),
+    )
+    slanted_observation = build_pose_observation(
+        landmarks=slanted,
+        nose_index=0,
+        left_shoulder_index=1,
+        right_shoulder_index=2,
+        left_hip_index=3,
+        right_hip_index=4,
+        box=BOX,
+        timestamp=0.0,
+    )
+    shoulder_center = (0.65 * 140.0, 0.60 * 400.0)
+    hip_center = (0.35 * 140.0, 0.30 * 400.0)
+    expected_angle = abs(90.0 - math.degrees(math.atan2(
+        shoulder_center[1] - hip_center[1],
+        shoulder_center[0] - hip_center[0],
+    )))
+
+    assert slanted_observation is not None
+    assert slanted_observation["torso_angle"] == pytest.approx(expected_angle)
 
 
 def test_arguments_are_keyword_only():
