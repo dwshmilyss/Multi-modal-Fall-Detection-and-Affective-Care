@@ -2,9 +2,12 @@
 """Download the official URFD cam0 videos and annotation CSVs."""
 
 import argparse
+import http.client
 import json
+import os
 import shutil
 import sys
+import tempfile
 import time
 import urllib.request
 from dataclasses import dataclass
@@ -70,8 +73,45 @@ def _is_complete_file(path: Path) -> bool:
         return False
 
 
-def _part_path(local_path: Path) -> Path:
-    return local_path.with_suffix(f"{local_path.suffix}.part")
+def _create_staging_path(local_path: Path) -> Path:
+    descriptor, staging_name = tempfile.mkstemp(
+        prefix=f".{local_path.name}.",
+        suffix=".part",
+        dir=local_path.parent,
+    )
+    os.close(descriptor)
+    return Path(staging_name)
+
+
+def _remove_staging_file(staging_path: Path) -> None:
+    try:
+        staging_path.unlink(missing_ok=True)
+    except OSError as error:
+        print(
+            f"Could not remove {staging_path}: {error}",
+            file=sys.stderr,
+        )
+
+
+def _validate_staged_file(staging_path: Path, response) -> None:
+    staged_size = staging_path.stat().st_size
+    if staged_size == 0:
+        raise URLError("empty download")
+
+    headers = getattr(response, "headers", None)
+    expected_length = headers.get("Content-Length") if headers is not None else None
+    if expected_length is None:
+        return
+
+    try:
+        expected_size = int(expected_length)
+    except (TypeError, ValueError) as error:
+        raise URLError(f"invalid Content-Length {expected_length!r}") from error
+    if expected_size != staged_size:
+        raise URLError(
+            f"Content-Length mismatch: downloaded {staged_size}; "
+            f"expected {expected_size}"
+        )
 
 
 def _download_file(url: str, part_path: Path) -> None:
@@ -86,6 +126,16 @@ def _download_file(url: str, part_path: Path) -> None:
             raise URLError(f"unexpected HTTP status {response.status}")
         with part_path.open("wb") as part_file:
             shutil.copyfileobj(response, part_file, length=1024 * 1024)
+        _validate_staged_file(part_path, response)
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    staging_path = _create_staging_path(path)
+    try:
+        staging_path.write_text(text, encoding="utf-8")
+        staging_path.replace(path)
+    finally:
+        _remove_staging_file(staging_path)
 
 
 def _write_manifest(dataset_dir: Path) -> dict:
@@ -96,10 +146,8 @@ def _write_manifest(dataset_dir: Path) -> dict:
         fps=30.0,
     )
     manifest_path = dataset_dir / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    manifest_json = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+    _atomic_write_text(manifest_path, manifest_json)
     return manifest
 
 
@@ -123,32 +171,37 @@ def download_urfd(
             skipped += 1
             continue
 
-        item.local_path.parent.mkdir(parents=True, exist_ok=True)
-        part_path = _part_path(item.local_path)
+        try:
+            item.local_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            failed.append(item.remote_name)
+            print(
+                f"Failed to create output directory for {item.remote_name}: {error}",
+                file=sys.stderr,
+            )
+            continue
+
         for attempt in range(attempt_count):
+            part_path = None
             try:
+                part_path = _create_staging_path(item.local_path)
                 _download_file(urfd_file_url(item.remote_name), part_path)
-            except (OSError, URLError) as error:
+                part_path.replace(item.local_path)
+                downloaded += 1
+                break
+            except (http.client.HTTPException, OSError, URLError) as error:
                 if attempt + 1 < attempt_count:
                     time.sleep(delay_seconds)
                 else:
-                    try:
-                        part_path.unlink(missing_ok=True)
-                    except OSError as cleanup_error:
-                        print(
-                            f"Could not remove {part_path}: {cleanup_error}",
-                            file=sys.stderr,
-                        )
                     failed.append(item.remote_name)
                     print(
                         f"Failed after {attempt_count} attempts: "
                         f"{item.remote_name}: {error}",
                         file=sys.stderr,
                     )
-            else:
-                part_path.replace(item.local_path)
-                downloaded += 1
-                break
+            finally:
+                if part_path is not None:
+                    _remove_staging_file(part_path)
 
     manifest = None
     if create_manifest and not failed:

@@ -2,6 +2,8 @@ import json
 import os
 import sys
 from dataclasses import FrozenInstanceError, fields
+from http.client import HTTPException
+from io import BytesIO
 from pathlib import Path
 from urllib.error import URLError
 
@@ -13,8 +15,11 @@ from deidao.fall_metrics import build_urfd_manifest
 from tools.download_urfd import (
     URFD_BASE_URL,
     DownloadItem,
+    _download_file,
+    _write_manifest,
     build_download_plan,
     download_urfd,
+    main,
     parse_args,
     urfd_file_url,
 )
@@ -49,6 +54,24 @@ def make_fake_downloader(monkeypatch, failures=None, errors=None):
 
     monkeypatch.setattr("tools.download_urfd._download_file", fake_download_file)
     return calls
+
+
+class FakeHTTPResponse:
+    def __init__(self, body, content_length=None):
+        self.status = 200
+        self.headers = {} if content_length is None else {
+            "Content-Length": content_length,
+        }
+        self.body = BytesIO(body)
+
+    def read(self, size=-1):
+        return self.body.read(size)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.body.close()
 
 
 def test_urfd_file_url_uses_official_data_base():
@@ -140,6 +163,105 @@ def test_download_retries_transient_errors(tmp_path, monkeypatch):
     assert not list(tmp_path.rglob("*.part"))
 
 
+def test_download_retries_http_exception_and_continues(tmp_path, monkeypatch):
+    calls = make_fake_downloader(
+        monkeypatch,
+        failures={"fall-01-cam0.mp4": 1},
+        errors={"fall-01-cam0.mp4": HTTPException("IncompleteRead")},
+    )
+    sleeps = []
+    monkeypatch.setattr(
+        "tools.download_urfd.time.sleep",
+        lambda seconds: sleeps.append(seconds),
+    )
+
+    result = download_urfd(
+        tmp_path,
+        retries=3,
+        retry_delay_seconds=0.0,
+        create_manifest=False,
+    )
+
+    assert result["downloaded"] == 72
+    assert result["failed"] == []
+    assert calls.count("fall-01-cam0.mp4") == 2
+    assert len(calls) == 73
+    assert sleeps == [0.0]
+    assert (
+        tmp_path / "adl" / "adl-40-cam0.mp4"
+    ).read_bytes() == b"adl-40-cam0.mp4"
+    assert not list(tmp_path.rglob("*.part"))
+
+
+def test_download_records_rename_failure_and_continues(tmp_path, monkeypatch):
+    calls = make_fake_downloader(monkeypatch)
+    original_replace = Path.replace
+
+    def fail_one_rename(source, destination):
+        if destination.name == "fall-01-cam0.mp4":
+            raise PermissionError("destination is locked")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr("tools.download_urfd.Path.replace", fail_one_rename)
+
+    result = download_urfd(
+        tmp_path,
+        retries=1,
+        retry_delay_seconds=0.0,
+        create_manifest=False,
+    )
+
+    assert result["downloaded"] == 71
+    assert result["failed"] == ["fall-01-cam0.mp4"]
+    assert len(calls) == 72
+    assert calls[-1] == "adl-40-cam0.mp4"
+    assert (tmp_path / "fall" / "fall-02-cam0.mp4").is_file()
+    assert not list(tmp_path.rglob("*.part"))
+
+
+def test_download_uses_unique_staging_path_for_each_attempt(
+    tmp_path,
+    monkeypatch,
+):
+    target = tmp_path / "fall" / "fall-01-cam0.mp4"
+    for item in build_download_plan(tmp_path):
+        if item.remote_name == "fall-01-cam0.mp4":
+            continue
+        item.local_path.parent.mkdir(parents=True, exist_ok=True)
+        item.local_path.write_bytes(b"already downloaded")
+
+    staging_paths = []
+
+    def fake_download_file(url, part_path):
+        remote_name = url.removeprefix(URFD_BASE_URL)
+        assert remote_name == "fall-01-cam0.mp4"
+        staging_paths.append(part_path)
+        if len(staging_paths) == 1:
+            part_path.write_bytes(b"incomplete")
+            raise URLError("temporary failure")
+        part_path.write_bytes(b"complete")
+
+    monkeypatch.setattr("tools.download_urfd._download_file", fake_download_file)
+    monkeypatch.setattr("tools.download_urfd.time.sleep", lambda seconds: None)
+
+    result = download_urfd(
+        tmp_path,
+        retries=2,
+        retry_delay_seconds=0.0,
+        create_manifest=False,
+    )
+
+    assert result["downloaded"] == 1
+    assert result["failed"] == []
+    assert len(staging_paths) == 2
+    assert len({str(path) for path in staging_paths}) == 2
+    assert all(path.parent == target.parent for path in staging_paths)
+    assert all(path.name.startswith(".fall-01-cam0.mp4.") for path in staging_paths)
+    assert all(path.suffix == ".part" for path in staging_paths)
+    assert target.read_bytes() == b"complete"
+    assert not list(tmp_path.rglob("*.part"))
+
+
 def test_download_records_final_failure_and_continues(tmp_path, monkeypatch):
     calls = make_fake_downloader(monkeypatch)
     sleeps = []
@@ -171,6 +293,25 @@ def test_download_records_final_failure_and_continues(tmp_path, monkeypatch):
     assert (tmp_path / "fall" / "fall-01-cam0.mp4").read_bytes().startswith(b"fall-")
 
 
+def test_download_file_rejects_empty_and_length_mismatched_responses(
+    tmp_path,
+    monkeypatch,
+):
+    stage_path = tmp_path / ".response.part"
+
+    def fake_urlopen(request, timeout):
+        if request.full_url == urfd_file_url("fall-01-cam0.mp4"):
+            return FakeHTTPResponse(b"", content_length=None)
+        return FakeHTTPResponse(b"abc", content_length="4")
+
+    monkeypatch.setattr("tools.download_urfd.urllib.request.urlopen", fake_urlopen)
+
+    with pytest.raises(URLError, match="empty download"):
+        _download_file(urfd_file_url("fall-01-cam0.mp4"), stage_path)
+    with pytest.raises(URLError, match="Content-Length mismatch"):
+        _download_file(urfd_file_url("fall-02-cam0.mp4"), stage_path)
+
+
 def test_download_writes_manifest_after_all_items_succeed(tmp_path, monkeypatch):
     make_fake_downloader(monkeypatch)
 
@@ -191,6 +332,28 @@ def test_download_writes_manifest_after_all_items_succeed(tmp_path, monkeypatch)
     }
     assert json.loads(manifest_path.read_text(encoding="utf-8")) == expected_manifest
     assert len(expected_manifest["entries"]) == 70
+
+
+def test_manifest_write_is_atomic_and_cleans_staging(tmp_path, monkeypatch):
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text("existing manifest", encoding="utf-8")
+    monkeypatch.setattr(
+        "tools.download_urfd.build_urfd_manifest",
+        lambda *args, **kwargs: {"entries": []},
+    )
+
+    def fail_after_partial_write(self, data, encoding=None, errors=None, newline=None):
+        with self.open("w", encoding=encoding, errors=errors, newline=newline) as file:
+            file.write(data[:20])
+            raise OSError("disk full")
+
+    monkeypatch.setattr("tools.download_urfd.Path.write_text", fail_after_partial_write)
+
+    with pytest.raises(OSError, match="disk full"):
+        _write_manifest(tmp_path)
+
+    assert manifest_path.read_text(encoding="utf-8") == "existing manifest"
+    assert not list(tmp_path.rglob("*.part"))
 
 
 def test_cli_defaults_and_options_are_official_dataset_settings():
@@ -216,3 +379,22 @@ def test_cli_defaults_and_options_are_official_dataset_settings():
     assert enabled.retry_delay_seconds == 0.25
     assert enabled.create_manifest is True
     assert disabled.create_manifest is False
+
+
+def test_cli_failure_returns_error_and_prints_summary(monkeypatch, capsys):
+    def fail_download(output_dir, retries, retry_delay_seconds, create_manifest):
+        return {
+            "downloaded": 2,
+            "skipped": 3,
+            "failed": ["fall-01-cam0.mp4"],
+            "manifest": None,
+        }
+
+    monkeypatch.setattr("tools.download_urfd.download_urfd", fail_download)
+
+    exit_code = main(["--output", "custom/urfd", "--no-manifest"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Downloaded 2; skipped 3; failed 1." in captured.out
+    assert "Failed files: fall-01-cam0.mp4" in captured.err
