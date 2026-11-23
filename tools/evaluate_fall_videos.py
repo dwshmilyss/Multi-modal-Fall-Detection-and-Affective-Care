@@ -74,6 +74,7 @@ def _write_reports(
     payload["camera"] = manifest.get("camera", report.camera)
     if manifest.get("fps") is not None:
         payload["fps"] = manifest["fps"]
+    payload["selected_count"] = len(results)
     payload["results"] = [asdict(result) for result in results]
 
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -690,6 +690,7 @@ def test_cli_writes_json_and_markdown_and_continues_after_read_errors(tmp_path):
     payload = json.loads((output / "fall_evaluation.json").read_text(encoding="utf-8"))
     assert payload["dataset"] == "URFD"
     assert payload["camera"] == "cam0"
+    assert payload.get("selected_count") == 2
     assert payload["evaluated_count"] == 1
     assert payload["overall_metrics"]["tp"] == 1
     assert payload["read_errors"] == [f"{dataset / 'adl' / 'adl-01-cam0.mp4'}: decoder failed"]

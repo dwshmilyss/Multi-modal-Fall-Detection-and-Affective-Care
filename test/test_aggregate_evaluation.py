@@ -224,6 +224,37 @@ def test_render_aggregate_markdown_distinguishes_selected_and_valid_counts(tmp_p
     assert "读取失败：1" in markdown
 
 
+def test_render_aggregate_markdown_prefers_explicit_selected_count(tmp_path):
+    from tools.aggregate_evaluation import render_aggregate_markdown
+
+    usable_result = make_result(
+        "fall/fall-01-cam0.mp4",
+        should_alarm=True,
+        activity_group="fall",
+        alarm_times=(11.0,),
+        action_start_seconds=None,
+    )
+    failed_result = make_result(
+        "fall/fall-02-cam0.mp4",
+        should_alarm=True,
+        activity_group="fall",
+        read_error="decoder failed",
+    )
+    report = asdict(summarize_results([usable_result, failed_result]))
+    report["dataset"] = "URFD"
+    report["camera"] = "cam0"
+    report["selected_count"] = 5
+    report["results"] = [asdict(usable_result), asdict(failed_result)]
+    fall_report_path = tmp_path / "fall-with-explicit-selected-count.json"
+    fall_report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    markdown = render_aggregate_markdown(fall_report_path)
+
+    assert "URFD 选择/尝试评测视频：5" in markdown
+    assert "URFD 有效评测视频：1" in markdown
+    assert "读取失败：1" in markdown
+
+
 def test_render_aggregate_markdown_requires_a_supplied_emotion_report(tmp_path):
     from tools.aggregate_evaluation import render_aggregate_markdown
 
